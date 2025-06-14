@@ -4,10 +4,11 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
-#include <errno.h>
 #include <unistd.h>
 #include <sys/select.h>
 #include <sys/types.h>
+#include <errno.h>
+#include <signal.h>
 
 #include "utils/terminal_handler.h"
 #include "utils/e_string.h"
@@ -24,7 +25,19 @@
         18|     _write_display(...);
         19|     fflush(stdout);
 */
+
+static int resize_terminal = 0;
+
+static void _handle_winch(int sig);
 static void _reset_cursor(struct e_cursor *curs, struct e_stack_err *errs);
+static void _clear_screen(void);
+static void _render_resized_display(
+    const char *prompt,
+    struct e_string *dest,
+    struct e_cursor *curs,
+    struct e_history *history, 
+    struct e_stack_err *errs
+);
 /* double pointer is needed because these functions free *p_dest and loads the e_string retrieved from history */
 static void _set_str_to_history_curr(
     struct e_string **p_dest,
@@ -108,12 +121,76 @@ static stat_code _handle_display(
 );
 
 
+static void _handle_winch(int sig) {
+    (void)sig;
+    resize_terminal = 1;
+}
+
 static void _reset_cursor(struct e_cursor *curs, struct e_stack_err *errs) {
     if (NULL != curs) {
         curs->x = 0;
         curs->y = 0;
     }
     else e_err_push(errs, e_create_err(NULL_CURSOR_ERROR, NULL_CURSOR_ERROR_MSG));
+}
+
+static void _clear_screen(void) {
+#ifdef _WIN32
+    system("cls");
+#else
+    system("clear");
+#endif
+}
+
+static void _render_resized_display(
+    const char *prompt,
+    struct e_string *dest,
+    struct e_cursor *curs,
+    struct e_history *history, 
+    struct e_stack_err *errs
+) {
+    struct e_string *tmp;
+    size_t term_cols;
+    size_t new_x, new_y;
+    size_t prompt_len;
+    size_t i;
+
+    if (
+        NULL == dest ||
+        NULL == curs ||
+        NULL == history ||
+        NULL == history->entries
+    ) return;
+
+    if (NULL == prompt) prompt_len = 0;
+    else prompt_len = strlen(prompt);
+
+    _clear_screen();
+    for (i = 0; i < history->len; i ++) {
+        tmp = history->entries[i];
+        if (NULL != tmp) printf("%s%s\n", prompt, history->entries[i]->content);
+    }
+    printf("%s%s", prompt, dest->content);
+
+    get_terminal_size(&term_cols, NULL, errs);
+    
+    new_x = (dest->len + prompt_len) % term_cols;
+    new_y = (dest->len + prompt_len) / term_cols;
+
+    /*
+        new_y - 1 because each line ending char overflows in the next line, so n chars overflows to the n-th line
+        (e.g first line -> overflow 1 char, second line -> overflow one char, third line -> overflow 2 chars, and so on)
+    */
+    if (new_x < curs->x) printf("\033[%ldD", curs->x - new_x - new_y - 1);
+    else if (new_x > curs->x) printf("\033[%ldC", new_x - curs->x - new_y - 1);
+
+    if (new_y < curs->y) printf("\033[%ldA", curs->y - new_y);
+    else if (new_y > curs->y) printf("\033[%ldB", new_y - curs->y);
+
+    curs->x = new_x;
+    curs->y = new_y;
+    
+    fflush(stdout);
 }
 
 static void _set_str_to_history_curr(
@@ -181,6 +258,12 @@ static void _up_arrow(
     struct e_history *history,
     struct e_stack_err *errs
 ) {
+    if (
+        NULL == dest || NULL == *dest ||
+        NULL == history || NULL == history->entries ||
+        NULL == curs
+    ) return;
+    
     if (history->curr == history->len) e_clean_str(*dest);
     else _set_str_to_history_curr(dest, history, prompt_len, curs, errs);
     
@@ -195,6 +278,12 @@ static void _down_arrow(
     struct e_history *history,
     struct e_stack_err *errs
 ) {
+    if (
+        NULL == dest || NULL == *dest ||
+        NULL == history || NULL == history->entries ||
+        NULL == curs
+    ) return;
+    
     if (history->curr == history->len) history->curr = 0;
     if (history->curr == history->len - 1) {
         e_clean_str(*dest);
@@ -229,10 +318,11 @@ static void _right_arrow(
 
     if (curs->y <= SIZE_MAX / term_cols && prompt_len <= SIZE_MAX - dest->len) {
         if (curs->y * term_cols + curs->x < dest->len + prompt_len) {
-            if (curs->x > term_cols - 1) {
+            /* -1 is for the condition to be valid, adding -1 is because
+            curs->x starts from 0 and term_cols starts from 1 --> so it is -2 */
+            if (curs->x > term_cols - 2) {
                 curs->x = 0;
                 curs->y ++;
-                printf("\n");
             }
             else curs->x ++;
         }
@@ -259,7 +349,7 @@ static void _left_arrow(
 
     if (curs->y > 0) {
         if (curs->x == 0) {
-            curs->x = term_cols;
+            curs->x = term_cols - 1;
             curs->y --;
         }
         else curs->x --;
@@ -512,8 +602,10 @@ stat_code easycli(
     ret = select(STDIN_FILENO + 1, &readfds, NULL, NULL, NULL);
 
     if (-1 == ret) {
-        if (EINTR == errno) {
-            retval = E_EXIT;
+        if (EINTR == errno && resize_terminal) {
+            retval = E_CONTINUE;
+            _render_resized_display(prompt, *dest, curs, history, errs);
+            resize_terminal = 0;
             goto exit;
         }
         else {
@@ -541,6 +633,14 @@ void run_easycli_ctx(
     struct e_cursor curs = { .x = 0, .y = 0 };
     stat_code code;
     
+    /* setup screen resize interrupt */
+    struct sigaction sa;
+    sa.sa_handler = _handle_winch;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGWINCH, &sa, NULL);
+
+    _clear_screen();
     do {
         code = easycli(prompt, &str, &curs, history, errs);
         if (E_SEND_COMMAND == code) {
