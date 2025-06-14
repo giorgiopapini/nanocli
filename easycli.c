@@ -18,10 +18,10 @@
 
 /*
     important! --> fflush(stdout) is not automatically executed inside display management functions
-    like "_clean_display()", "_refresh_display()", and "_handle_display()". It should be executed
+    like "_clean_display()", "_write_display()", and "_handle_display()". It should be executed
     after function execution
     (e.g: )
-        18|     _refresh_display(...);
+        18|     _write_display(...);
         19|     fflush(stdout);
 */
 static void _reset_cursor(struct e_cursor *curs, struct e_stack_err *errs);
@@ -38,6 +38,20 @@ static void _move_cursor_last_line(
     struct e_cursor *curs,
     const size_t prompt_len,
     const char pressed_key,
+    struct e_stack_err *errs
+);
+static void _up_arrow(
+    struct e_string **dest,
+    struct e_cursor *curs,
+    const size_t prompt_len,
+    struct e_history *history,
+    struct e_stack_err *errs
+);
+static void _down_arrow(
+    struct e_string **dest,
+    struct e_cursor *curs,
+    const size_t prompt_len,
+    struct e_history *history,
     struct e_stack_err *errs
 );
 static void _right_arrow(
@@ -78,7 +92,7 @@ static void _clean_display(
     const char pressed_key,
     struct e_stack_err *errs
 );
-static void _refresh_display(
+static void _write_display(
     const char *prompt,
     struct e_string *dest,
     struct e_cursor *curs,
@@ -158,6 +172,44 @@ static void _move_cursor_last_line(
     
     if (move_down > 0) printf("\033[%ldB\r", move_down);
     printf("\033[%ldG", term_cols);
+}
+
+static void _up_arrow(
+    struct e_string **dest,
+    struct e_cursor *curs,
+    const size_t prompt_len,
+    struct e_history *history,
+    struct e_stack_err *errs
+) {
+    if (history->curr == history->len) e_clean_str(*dest);
+    else _set_str_to_history_curr(dest, history, prompt_len, curs, errs);
+    
+    if (0 == history->curr) history->curr = history->len;
+    else history->curr --;
+}
+
+static void _down_arrow(
+    struct e_string **dest,
+    struct e_cursor *curs,
+    const size_t prompt_len,
+    struct e_history *history,
+    struct e_stack_err *errs
+) {
+    if (history->curr == history->len) history->curr = 0;
+    if (history->curr == history->len - 1) {
+        e_clean_str(*dest);
+        return;
+    }
+    
+    history->curr ++;
+    if (e_str_equal(*dest, history->entries[history->curr])) history->curr ++;
+    
+    if (history->curr < history->len)
+        _set_str_to_history_curr(dest, history, prompt_len, curs, errs);
+    else {
+        history->curr = history->len - 1;
+        e_clean_str(*dest);
+    }
 }
 
 static void _right_arrow(
@@ -336,7 +388,7 @@ static void _clean_display(
     printf("\r");
 }
 
-static void _refresh_display(
+static void _write_display(
     const char *prompt,
     struct e_string *dest,
     struct e_cursor *curs,
@@ -402,19 +454,8 @@ static stat_code _handle_display(
             read(STDIN_FILENO, c, 1);
             read(STDIN_FILENO, c, 1);
             switch(*c) {
-                case ARROW_UP_KEY: {
-                    if (0 == history->curr) history->curr = history->len - 1;
-                    else history->curr --;
-                    _set_str_to_history_curr(dest, history, prompt_len, curs, errs);
-                    break;
-                }
-                case ARROW_DOWN_KEY: {
-                    if (history->len > 0 && history->curr == (history->len - 1))
-                        history->curr = 0;
-                    else history->curr ++;
-                    _set_str_to_history_curr(dest, history, prompt_len, curs, errs);
-                    break;
-                }
+                case ARROW_UP_KEY:          _up_arrow(dest, curs, prompt_len, history, errs); break;
+                case ARROW_DOWN_KEY:        _down_arrow(dest, curs, prompt_len, history, errs); break;
                 case ARROW_RIGHT_KEY:       _right_arrow(*dest, curs, prompt_len, errs); break;
                 case ARROW_LEFT_KEY:        _left_arrow(*dest, curs, prompt_len, errs); break;
                 case CANC_KEY: {
@@ -427,7 +468,7 @@ static stat_code _handle_display(
             }
         }
         else if (IS_LITERAL(*c)) _literal(*dest, curs, prompt_len, c, errs);
-        _refresh_display(prompt, *dest, curs, errs);
+        _write_display(prompt, *dest, curs, errs);
     }
 
     fflush(stdout);
