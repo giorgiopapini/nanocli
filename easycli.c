@@ -4,10 +4,10 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <errno.h>
 #include <unistd.h>
 #include <sys/select.h>
 #include <sys/types.h>
-#include <errno.h>
 
 #include "utils/terminal_handler.h"
 #include "utils/e_string.h"
@@ -24,9 +24,7 @@
         18|     _write_display(...);
         19|     fflush(stdout);
 */
-
 static void _reset_cursor(struct e_cursor *curs, struct e_stack_err *errs);
-static void _clear_screen(void);
 /* double pointer is needed because these functions free *p_dest and loads the e_string retrieved from history */
 static void _set_str_to_history_curr(
     struct e_string **p_dest,
@@ -118,14 +116,6 @@ static void _reset_cursor(struct e_cursor *curs, struct e_stack_err *errs) {
     else e_err_push(errs, e_create_err(NULL_CURSOR_ERROR, NULL_CURSOR_ERROR_MSG));
 }
 
-static void _clear_screen(void) {
-#ifdef _WIN32
-    system("cls");
-#else
-    system("clear");
-#endif
-}
-
 static void _set_str_to_history_curr(
     struct e_string **p_dest,
     struct e_history *history,
@@ -191,12 +181,6 @@ static void _up_arrow(
     struct e_history *history,
     struct e_stack_err *errs
 ) {
-    if (
-        NULL == dest || NULL == *dest ||
-        NULL == history || NULL == history->entries ||
-        NULL == curs
-    ) return;
-    
     if (history->curr == history->len) e_clean_str(*dest);
     else _set_str_to_history_curr(dest, history, prompt_len, curs, errs);
     
@@ -211,12 +195,7 @@ static void _down_arrow(
     struct e_history *history,
     struct e_stack_err *errs
 ) {
-    if (
-        NULL == dest || NULL == *dest ||
-        NULL == history || NULL == history->entries ||
-        NULL == curs
-    ) return;
-    
+    if (0 == history->len) return;
     if (history->curr == history->len) history->curr = 0;
     if (history->curr == history->len - 1) {
         e_clean_str(*dest);
@@ -251,11 +230,10 @@ static void _right_arrow(
 
     if (curs->y <= SIZE_MAX / term_cols && prompt_len <= SIZE_MAX - dest->len) {
         if (curs->y * term_cols + curs->x < dest->len + prompt_len) {
-            /* -1 is for the condition to be valid, adding -1 is because
-            curs->x starts from 0 and term_cols starts from 1 --> so it is -2 */
-            if (curs->x > term_cols - 2) {
+            if (curs->x > term_cols - 1) {
                 curs->x = 0;
                 curs->y ++;
+                printf("\n");
             }
             else curs->x ++;
         }
@@ -282,7 +260,7 @@ static void _left_arrow(
 
     if (curs->y > 0) {
         if (curs->x == 0) {
-            curs->x = term_cols - 1;
+            curs->x = term_cols;
             curs->y --;
         }
         else curs->x --;
@@ -563,8 +541,7 @@ void run_easycli_ctx(
     struct e_history *history = e_create_history(DEFAULT_HISTORY_MAX_SIZE);
     struct e_cursor curs = { .x = 0, .y = 0 };
     stat_code code;
-
-    _clear_screen();
+    
     do {
         code = easycli(prompt, &str, &curs, history, errs);
         if (E_SEND_COMMAND == code) {

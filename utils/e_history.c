@@ -8,7 +8,7 @@ struct e_history *e_create_history(const size_t max_len) {
     struct e_history *new_history = malloc(sizeof *new_history);
     if (NULL == new_history) return NULL;
 
-    new_history->entries = malloc(max_len * sizeof *(new_history->entries));
+    new_history->entries = calloc(max_len, sizeof *(new_history->entries));
     if (NULL == new_history->entries) {
         free(new_history);
         return NULL;

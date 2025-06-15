@@ -8,6 +8,9 @@
     TODO:   Add support for unicode (UTF-8) chars (like ì, ù, §, 你, emoji, etc...)
 
     TODO:   Evaluate if it's better to use Alternate screen mode in easycli instead of clean_screen function
+
+    TODO:   New empty line on window resize are probably the '\n' escape char that overflows the line (cause ENTER prints '\n')
+
 */
 
 stat_code callback_on_enter(struct e_string *str, void *ctx, struct e_stack_err *errs);
