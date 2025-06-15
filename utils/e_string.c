@@ -35,6 +35,7 @@ void e_remove_char(struct e_string *str, const size_t target_index) {
 void e_add_char(struct e_string *str, const size_t target_index, const char new_char) {
     size_t i;
 
+    if (target_index > str->cap - 1) return;
     if (str == NULL || str->content == NULL) return;
     if (str->len >= str->cap - 1) return;
 

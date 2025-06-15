@@ -51,7 +51,7 @@ void e_stack_flush_errors(struct e_stack_err *errs) {
 
     printf("\r\n");
     while (NULL != (curr_err = e_err_pop(errs))) {
-        printf("\033[31m[ERROR] (%d) --> %s\033[0m\n", curr_err->code, curr_err->message);
+        printf("\033[31m[ERROR] (%d) --> %s\033[0m\r\n", curr_err->code, curr_err->message);
         e_free_error(curr_err);
     }
 }
