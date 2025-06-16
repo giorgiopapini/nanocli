@@ -15,7 +15,7 @@ int _e_stack_is_full(struct e_stack_err *errs) {
     return (size_t)errs->top == errs->cap - 1;
 }
 
-struct e_error *e_create_err(const err_code code, const char *message) {
+struct e_error *e_create_err(const e_err_code code, const char *message) {
     struct e_error *new_err = malloc(sizeof(*new_err));
     if (!new_err) return NULL;
 

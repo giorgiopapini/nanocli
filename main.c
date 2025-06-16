@@ -6,9 +6,16 @@
 
 /*
     TODO:   Evaluate if it's better to use Alternate screen mode in easycli instead of clean_screen function
+
+    TODO:   Maybe separate in another module tha cli state struct, add a function to check if members of it arent NULL
+            (so in arrow_up, arrow_down, etc... i dont have to do single checks, i can just call something like "is_cli_init");
+
+    TODO:   Try to implement all the linenoise features (especially the support for variour CTRL+key commands)
+
+    TODO:   Reduce the number of file as much as possible, ideally ONE file like linenoise
 */
 
-stat_code callback_on_enter(struct e_string *str, void *ctx, struct e_stack_err *errs);
+e_stat_code callback_on_enter(struct e_line *str, void *ctx, struct e_stack_err *errs);
 
 int main(void) {
     run_easycli_ctx(DEFAULT_PROMPT, DEFAULT_MAX_INPUT_LEN, NULL, callback_on_enter);
@@ -16,7 +23,7 @@ int main(void) {
     return 0;
 }
 
-stat_code callback_on_enter(struct e_string *str, void *ctx, struct e_stack_err *errs) {
+e_stat_code callback_on_enter(struct e_line *str, void *ctx, struct e_stack_err *errs) {
     (void)ctx;
     (void)errs;
     (void)str;

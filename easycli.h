@@ -3,8 +3,7 @@
 
 #include <stddef.h>
 
-#include "utils/e_string.h"
-#include "utils/e_history.h"
+#include "utils/e_line.h"
 #include "utils/error_handler.h"
 
 #define DEFAULT_PROMPT              "easycli > "
@@ -23,26 +22,14 @@ typedef enum {
     E_EXIT = -1,
     E_CONTINUE = 0,  /* rename something like "keep running, or keep listening, or continue" since EXIT means exiting from CLI loop, and Send command means literally send command */
     E_SEND_COMMAND
-} stat_code;
-
-struct e_cursor {
-    size_t x;
-    size_t y;
-};
+} e_stat_code;
 
 
-stat_code easycli(
-    const char *prompt,
-    struct e_string **dest,
-    struct e_cursor *curs,
-    struct e_history *history,
-    struct e_stack_err *errs
-);
 void run_easycli_ctx(
     const char *prompt,
     size_t max_str_len,  /* excluding '\0' */
     void *ctx,
-    stat_code (*callback_on_enter)(struct e_string *dest, void *ctx, struct e_stack_err *errs)
+    e_stat_code (*callback_on_enter)(struct e_line *dest, void *ctx, struct e_stack_err *errs)
 );
 
 #endif

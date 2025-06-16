@@ -5,8 +5,11 @@
 #define TCGETATTR_ERROR_MSG         "Unable to retrieve terminal attributes"
 #define TCSETATTR_ERROR_MSG         "Unable to set terminal attributes"
 #define TERMINAL_SIZE_ERROR_MSG     "Couldn't retrieve the current terminal size"
-#define NULL_STR_DEST_ERROR_MSG     "Destination struct e_string is NULL"
+#define NULL_STR_DEST_ERROR_MSG     "Destination struct e_line is NULL"
 #define NULL_CURSOR_ERROR_MSG       "Cursor struct e_cursor is NULL"
+#define NULL_HISTORY_ERROR_MSG      "History struct e_history is NULL"
+#define NULL_HISTORY_ENTR_ERROR_MSG "History entries (history->entries) is NULL"
+#define NULL_CLI_ERROR_MSG          "CLI struct e_cli_state is NULL"
 #define SIZE_T_OVERFLOW_MSG         "'size_t' overflowed"
 #define BUFFER_OVERFLOW_MSG         "Input overflowed buffer"
 
@@ -19,14 +22,13 @@
     TCGETATTR_ERROR,
     TCSETATTR_ERROR,
     TERMINAL_SIZE_ERROR,
-    NULL_STR_DEST_ERROR,
-    NULL_CURSOR_ERROR,
+    NULL_POINTER_ERROR,
     SIZE_T_OVERFLOW,
     BUFFER_OVERFLOW
-} err_code;
+} e_err_code;
 
 struct e_error {
-    err_code code;
+    e_err_code code;
     const char *message;
 };
 
@@ -37,7 +39,7 @@ struct e_stack_err {
 };
 
 
-struct e_error *e_create_err(const err_code code, const char *message);
+struct e_error *e_create_err(const e_err_code code, const char *message);
 struct e_stack_err *e_create_stack_err(const size_t max_size);
 void e_err_push(struct e_stack_err *errs, struct e_error *new_err);
 struct e_error *e_err_pop(struct e_stack_err *errs);

@@ -32,9 +32,9 @@ CFLAGS += -Wwrite-strings
 CFLAGS += -Wconversion -Wsign-conversion
 
 # Only for debugging!
-#LDFLAGS += -fsanitize=address,undefined
-#CFLAGS += -fsanitize=address,undefined
-#CFLAGS += -O0
+LDFLAGS += -fsanitize=address,undefined
+CFLAGS += -fsanitize=address,undefined
+CFLAGS += -O0
 
 SRC != find . -name '*.c'
 OBJ = ${SRC:.c=.o}

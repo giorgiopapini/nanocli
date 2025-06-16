@@ -3,7 +3,7 @@
 
 #include <stddef.h>
 
-#include "e_string.h"
+#include "e_line.h"
 
 #define DEFAULT_HISTORY_MAX_SIZE        1024
 
@@ -18,14 +18,14 @@
 */
 
 struct e_history {
-    struct e_string **entries;  /* dinamically allocated e_string pointers */
+    struct e_line **entries;  /* dinamically allocated e_line pointers */
     size_t curr;
     size_t len;
     size_t cap;
 };
 
 struct e_history *e_create_history(const size_t max_len);
-void e_add_entry(struct e_history *history, const struct e_string *new_str);
+void e_add_entry(struct e_history *history, const struct e_line *new_line);
 void e_free_history(struct e_history *history);
 
 
