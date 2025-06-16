@@ -12,7 +12,12 @@
 #include <ctype.h>
 #include <termios.h>
 
-#define IS_LITERAL(c)       ((unsigned int)(c) >= 32 && (unsigned int)(c) <= 126)
+#define ARROW_UP_KEY 'A'
+#define ARROW_DOWN_KEY 'B'
+#define ARROW_RIGHT_KEY 'C'
+#define ARROW_LEFT_KEY 'D'
+#define CANC_KEY '3'
+#define TILDE_KEY '~'
 
 struct e_cursor {
     size_t x;
@@ -38,6 +43,28 @@ struct e_cli_state {
     struct e_history *history;
     struct e_cursor *curs;
 };
+
+typedef enum {
+	CTRL_A = 1,
+	CTRL_B = 2,
+	CTRL_C = 3,
+	CTRL_D = 4,
+	CTRL_E = 5,
+	CTRL_F = 6,
+	CTRL_H = 8,
+	TAB = 9,
+    NEWLINE_KEY = 10,
+	CTRL_K = 11,
+	CTRL_L = 12,
+	CARR_RET_KEY = 13,
+	CTRL_N = 14,
+	CTRL_P = 16,
+	CTRL_T = 20,
+	CTRL_U = 21,
+	CTRL_W = 23,
+	ESC_KEY = 27,
+	BACKSPACE_KEY = 127
+} e_keys;
 
 /* ================= functions related to line management ================== */
 struct e_line *e_create_line(const size_t max_len);
@@ -71,6 +98,7 @@ static void _reset_cursor(struct e_cursor *curs);
 /* double pointer is needed because these functions free *p_dest and loads the e_line retrieved from history */
 static void _set_line_to_history_curr(struct e_cli_state *cli);
 static void _move_cursor_last_line(struct e_cli_state *cli, const char pressed_key);
+static void _enter(struct e_cli_state *cli, const char c);
 static void _up_arrow(struct e_cli_state *cli);
 static void _down_arrow(struct e_cli_state *cli);
 static void _right_arrow(struct e_cli_state *cli);
@@ -130,10 +158,8 @@ void e_add_char(struct e_line *line, const size_t target_index, const char new_c
 void e_copy_line(struct e_line *dest, const struct e_line *src) {
     size_t i;
 
-    if (
-        NULL == dest || NULL == dest->content ||
-        NULL == src || NULL == src->content
-    ) return;
+    if (NULL == dest || NULL == dest->content || NULL == src || NULL == src->content)
+        return;
 
     dest->len = src->len;
     dest->cap = src->cap;
@@ -299,7 +325,7 @@ void _get_terminal_size(size_t *cols, size_t *rows) {
     if (NULL != rows) *rows = w.ws_row;
 }
 /* ========================================================================= */
-
+/* ============================ CLI management ============================= */
 static int _is_cli_state_valid(struct e_cli_state *cli) {
     if (NULL == cli) return 0;
     if (NULL == cli->curs) return 0;
@@ -320,7 +346,7 @@ static void _set_line_to_history_curr(struct e_cli_state *cli) {
     the freshly allocated memory will than be automatically deallocated at the end of everything */
     struct e_line *res;
     size_t used_rows;
-    size_t term_cols;
+    size_t term_cols = 0;
     size_t prompt_len;
     _get_terminal_size(&term_cols, NULL);
 
@@ -339,7 +365,7 @@ static void _set_line_to_history_curr(struct e_cli_state *cli) {
 }
 
 static void _move_cursor_last_line(struct e_cli_state *cli, const char pressed_key) {
-    size_t term_cols;
+    size_t term_cols = 0;
     size_t prompt_len;
     size_t used_rows;
     size_t move_down;
@@ -359,6 +385,13 @@ static void _move_cursor_last_line(struct e_cli_state *cli, const char pressed_k
     else printf("\r\033[%ldC", (*cli->p_line)->len + prompt_len);
     
     fflush(stdout);
+}
+
+static void _enter(struct e_cli_state *cli, const char c) {
+    (*cli->p_line)->content[(*cli->p_line)->len] = '\0';
+    _move_cursor_last_line(cli, c);
+    e_add_entry(cli->history, *cli->p_line);
+    printf("\r\n");
 }
 
 static void _up_arrow(struct e_cli_state *cli) {
@@ -390,7 +423,7 @@ static void _down_arrow(struct e_cli_state *cli) {
 }
 
 static void _right_arrow(struct e_cli_state *cli) {
-    size_t term_cols;
+    size_t term_cols = 0;
     size_t prompt_len;
     _get_terminal_size(&term_cols, NULL);
     prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
@@ -409,7 +442,7 @@ static void _right_arrow(struct e_cli_state *cli) {
 }
 
 static void _left_arrow(struct e_cli_state *cli) {
-    size_t term_cols;
+    size_t term_cols = 0;
     size_t prompt_len;
     _get_terminal_size(&term_cols, NULL);
 
@@ -427,7 +460,7 @@ static void _left_arrow(struct e_cli_state *cli) {
 }
 
 static void _canc(struct e_cli_state *cli) {
-    size_t term_cols;
+    size_t term_cols = 0;
     size_t abs_x = 0;
     size_t prompt_len;
     size_t used_rows;
@@ -447,9 +480,11 @@ static void _canc(struct e_cli_state *cli) {
 
 static void _backspace(struct e_cli_state *cli) {
     /* move the cursor_pos than call _canc(...) function */
-    size_t term_cols;
+    size_t term_cols = 0;
     size_t prompt_len;
     int exec_backspace = 1;
+    if (0 >= (*cli->p_line)->len) return;  /* nothing to delete, return */
+    
     _get_terminal_size(&term_cols, NULL);
     prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
 
@@ -473,7 +508,7 @@ static void _backspace(struct e_cli_state *cli) {
 }
 
 static void _literal(struct e_cli_state *cli, char *c) {
-    size_t term_cols;
+    size_t term_cols = 0;
     size_t prompt_len;
     size_t real_index = 0;
     _get_terminal_size(&term_cols, NULL);
@@ -498,7 +533,7 @@ static void _literal(struct e_cli_state *cli, char *c) {
 
 static void _clean_display(struct e_cli_state *cli) {
     size_t term_rows;
-    size_t term_cols;
+    size_t term_cols = 0;
     size_t used_rows;
     size_t i;
     size_t prompt_len = (NULL == cli->prompt) ? 0 : strlen(cli->prompt);
@@ -517,7 +552,7 @@ static void _clean_display(struct e_cli_state *cli) {
 
 static void _write_display(struct e_cli_state *cli) {
     size_t term_rows;
-    size_t term_cols;
+    size_t term_cols = 0;
     size_t used_rows;
     size_t prompt_len = (NULL == cli->prompt) ? 0 : strlen(cli->prompt);
     _get_terminal_size(&term_cols, &term_rows);
@@ -534,41 +569,61 @@ static void _write_display(struct e_cli_state *cli) {
 
 static e_stat_code _handle_display(struct e_cli_state *cli, char *c) {
     e_stat_code status = E_CONTINUE;
+    size_t term_cols = 1;
+    int is_enter = (*c == NEWLINE_KEY || *c == CARR_RET_KEY);
+    
+    _get_terminal_size(&term_cols, NULL);
+
     if (!_is_cli_state_valid(cli)) return E_EXIT;
+    if (!is_enter) _clean_display(cli);
 
-    if (ENTER_KEY == *c) {
-        (*cli->p_line)->content[(*cli->p_line)->len] = '\0';
+    switch (*c) {
+    case NEWLINE_KEY:
+    case CARR_RET_KEY:
         status = E_SEND_COMMAND;
-        _move_cursor_last_line(cli, *c);
-        e_add_entry(cli->history, *cli->p_line);
-        printf("\r\n");
-    }
-    else {
-        _clean_display(cli);
-        if (127 == *c || 8 == *c) {
-            if ((*cli->p_line)->len > 0) _backspace(cli);
+        _enter(cli, *c);
+        break;
+    case BACKSPACE_KEY:
+    case CTRL_H:
+        _backspace(cli);
+        break;
+    case ESC_KEY:
+        if (read(STDIN_FILENO, c, 1) <= 0) break;
+        if (read(STDIN_FILENO, c, 1) <= 0) break;
+        switch(*c) {
+        case ARROW_UP_KEY:      _up_arrow(cli); break;
+        case ARROW_DOWN_KEY:    _down_arrow(cli); break;
+        case ARROW_RIGHT_KEY:   _right_arrow(cli); break;
+        case ARROW_LEFT_KEY:    _left_arrow(cli); break;
+        case CANC_KEY:
+            if (read(STDIN_FILENO, c, 1) <= 0) break;  /* removes undesired tilde */
+            _canc(cli);
+            break;
+        default: break;
         }
-        else if ('\033' == *c) {  /* catch special keys, add behaviour only to arrow keys (for now) */
-            read(STDIN_FILENO, c, 1);
-            read(STDIN_FILENO, c, 1);
-            switch(*c) {
-                case ARROW_UP_KEY:          _up_arrow(cli); break;
-                case ARROW_DOWN_KEY:        _down_arrow(cli); break;
-                case ARROW_RIGHT_KEY:       _right_arrow(cli); break;
-                case ARROW_LEFT_KEY:        _left_arrow(cli); break;
-                case CANC_KEY: {
-                    /* remove undesired tilde char after canc, otherwise it will affect refresh_display function */
-                    read(STDIN_FILENO, c, 1);
-                    _canc(cli);
-                    break;
-                }
-                default:                    break;
-            }
-        }
-        else if (IS_LITERAL(*c)) _literal(cli, c);
-        _write_display(cli);
+        break;
+    case CTRL_A:
+        cli->curs->y = 0;
+        cli->curs->x = strlen(cli->prompt);
+        break;
+    case CTRL_B:                _left_arrow(cli); break;
+    case CTRL_D:                _canc(cli); break;
+    case CTRL_E:
+        cli->curs->y = ((*cli->p_line)->len + strlen(cli->prompt)) / term_cols;
+        cli->curs->x = ((*cli->p_line)->len + strlen(cli->prompt)) % term_cols;
+        break;
+    case CTRL_F:                _right_arrow(cli); break;
+    case CTRL_K:                break;  /* delete to the end of the line */
+    case CTRL_L:                _clear_terminal_screen(); break;
+    case CTRL_N:                _down_arrow(cli); break;
+    case CTRL_P:                _up_arrow(cli); break;
+    case CTRL_T:                break;  /* swap the 2 char before the cursor */
+    case CTRL_U:                break;  /* delete to the beginning of the line */
+    case CTRL_W:                break;  /* delete to the beginning of the current word */
+    default:                    _literal(cli, c); break;
     }
 
+    if (!is_enter) _write_display(cli);
     fflush(stdout);
     return status;
 }
