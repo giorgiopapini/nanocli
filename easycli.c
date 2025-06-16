@@ -234,7 +234,8 @@ static void _down_arrow(
     if (history->curr < history->len)
         _set_str_to_history_curr(dest, history, prompt_len, curs, errs);
     else {
-        history->curr = history->len - 1;
+        if (history->len > 0) history->curr = history->len - 1;
+        else history->curr = 0;
         e_clean_str(*dest);
     }
 }

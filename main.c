@@ -6,7 +6,6 @@
 
 /*
     TODO:   Evaluate if it's better to use Alternate screen mode in easycli instead of clean_screen function
-
 */
 
 stat_code callback_on_enter(struct e_string *str, void *ctx, struct e_stack_err *errs);
