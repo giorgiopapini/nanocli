@@ -2,7 +2,6 @@
 #include <string.h>
 
 #include "easycli.h"
-#include "utils/error_handler.h"
 
 /*
     TODO:   Evaluate if it's better to use Alternate screen mode in easycli instead of clean_screen function
@@ -12,10 +11,12 @@
 
     TODO:   Try to implement all the linenoise features (especially the support for variour CTRL+key commands)
 
-    TODO:   Reduce the number of file as much as possible, ideally ONE file like linenoise
+    TODO:   Reduce the number of file as much as possible, ideally ONE file like linenoise. --> remove error_handler and adopt
+            linenoise philosophy, if an error occours, return NULL char *line_content; (DON'T PRINT ERRORS, LET THE DEVELOPER
+            MANAGE ERRORS)
 */
 
-e_stat_code callback_on_enter(struct e_line *str, void *ctx, struct e_stack_err *errs);
+e_stat_code callback_on_enter(char *line_content, void *ctx);
 
 int main(void) {
     run_easycli_ctx(DEFAULT_PROMPT, DEFAULT_MAX_INPUT_LEN, NULL, callback_on_enter);
@@ -23,11 +24,10 @@ int main(void) {
     return 0;
 }
 
-e_stat_code callback_on_enter(struct e_line *str, void *ctx, struct e_stack_err *errs) {
+e_stat_code callback_on_enter(char *line_content, void *ctx) {
     (void)ctx;
-    (void)errs;
-    (void)str;
+    (void)line_content;
 
-    if (0 == strcmp(str->content, "exit")) return E_EXIT;
+    if (0 == strcmp(line_content, "exit")) return E_EXIT;
     return E_CONTINUE;
 }
