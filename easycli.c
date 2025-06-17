@@ -42,6 +42,7 @@ struct e_cli_state {
     struct e_line **p_line;
     struct e_history *history;
     struct e_cursor *curs;
+    size_t term_cols;
 };
 
 typedef enum {
@@ -67,32 +68,39 @@ typedef enum {
 } e_keys;
 
 /* ================= functions related to line management ================== */
-struct e_line *e_create_line(const size_t max_len);
-void e_remove_char(struct e_line *line, const size_t target_index);
-void e_add_char(struct e_line *line, const size_t target_index, const char new_char);
-void e_copy_line(struct e_line *dest, const struct e_line *src);
-int e_line_is_empty(const struct e_line *line);
-int e_line_equal(const struct e_line *line1, const struct e_line *line2);
-void e_clean_line(struct e_line *line);
-void e_free_line(struct e_line *line);
+struct e_line *_e_create_line(const size_t max_len);
+static void _e_remove_char(struct e_line *line, const size_t target_index);
+static void _e_delete_to_end(struct e_line *line, const size_t start_index);
+static void _e_delete_to_start(struct e_line *line, const size_t end_index);
+static void _e_add_char(struct e_line *line, const size_t target_index, const char new_char);
+static void _e_copy_line(struct e_line *dest, const struct e_line *src);
+static int _e_line_is_empty(const struct e_line *line);
+static int _e_line_equal(const struct e_line *line1, const struct e_line *line2);
+static void _e_clean_line(struct e_line *line);
+static void _e_free_line(struct e_line *line);
 /* ========================================================================= */
 /* ================ functions related to history management ================ */
-struct e_history *e_create_history(const size_t max_len);
-void e_add_entry(struct e_history *history, const struct e_line *new_line);
-void e_free_history(struct e_history *history);
+static struct e_history *_e_create_history(const size_t max_len);
+static void _e_add_entry(struct e_history *history, const struct e_line *new_line);
+static void _e_free_history(struct e_history *history);
 /* ========================================================================= */
 /* ========================== terminal management ========================== */
-void _clear_terminal_screen(void);
-void _enable_raw_mode(void);
-int _is_raw_mode_enabled(void);
-void _restore_terminal_mode(void);
+static void _get_terminal_size(size_t *cols, size_t *rows);
+static void _clear_terminal_screen(void);
+static void _enable_raw_mode(void);
+static void _restore_terminal_mode(void);
 
 static struct termios orig_termios;
 static int termios_saved = 0;
 static int raw_mode_on = 0;
 /* ========================================================================= */
 
-void _get_terminal_size(size_t *cols, size_t *rows);
+static struct e_cli_state *_create_e_cli_state(
+    const char *prompt,
+    const size_t max_line_size,
+    const size_t max_history_size
+);
+static void _e_free_cli_state(struct e_cli_state *cli);
 static int _is_cli_state_valid(struct e_cli_state *cli);
 static void _reset_cursor(struct e_cursor *curs);
 /* double pointer is needed because these functions free *p_dest and loads the e_line retrieved from history */
@@ -106,6 +114,9 @@ static void _left_arrow(struct e_cli_state *cli);
 static void _canc(struct e_cli_state *cli);
 static void _backspace(struct e_cli_state *cli);
 static void _literal(struct e_cli_state *cli, char *c);
+static void _ctrl_k(struct e_cli_state *cli);
+static void _ctrl_u(struct e_cli_state *cli);
+static void _ctrl_w(struct e_cli_state *cli);
 static void _clean_display(struct e_cli_state *cli);
 static void _write_display(struct e_cli_state *cli);
 static e_stat_code _handle_display(struct e_cli_state *cli, char *c);
@@ -113,7 +124,7 @@ e_stat_code easycli(struct e_cli_state *cli);
 
 
 /* ================= functions related to line management ================== */
-struct e_line *e_create_line(const size_t max_len) {
+struct e_line *_e_create_line(const size_t max_len) {
     struct e_line *new_line = malloc(sizeof *new_line);
     if (NULL == new_line) return NULL;
 
@@ -128,7 +139,7 @@ struct e_line *e_create_line(const size_t max_len) {
     return new_line;
 }
 
-void e_remove_char(struct e_line *line, const size_t target_index) {
+void _e_remove_char(struct e_line *line, const size_t target_index) {
     size_t i;
 
     if (NULL == line) return;
@@ -140,7 +151,24 @@ void e_remove_char(struct e_line *line, const size_t target_index) {
     line->len --;
 }
 
-void e_add_char(struct e_line *line, const size_t target_index, const char new_char) {
+static void _e_delete_to_end(struct e_line *line, const size_t start_index) {
+    size_t i;
+
+    if (NULL == line || NULL == line->content) return;
+    for (i = start_index; i < line->len; i ++) line->content[i] = '\0';
+    line->len -= (line->len - start_index);
+}
+
+static void _e_delete_to_start(struct e_line *line, const size_t end_index) {
+    size_t new_len;
+    if (NULL == line || NULL == line->content || line->len <= 0) return;
+    new_len = line->len - (end_index + 1);
+    memmove(line->content, line->content + end_index + 1, new_len);
+    line->content[new_len] = '\0';
+    line->len = new_len;
+}
+
+void _e_add_char(struct e_line *line, const size_t target_index, const char new_char) {
     size_t i;
 
     if (target_index > line->cap - 1) return;
@@ -155,7 +183,7 @@ void e_add_char(struct e_line *line, const size_t target_index, const char new_c
     line->content[line->len] = '\0';
 }
 
-void e_copy_line(struct e_line *dest, const struct e_line *src) {
+void _e_copy_line(struct e_line *dest, const struct e_line *src) {
     size_t i;
 
     if (NULL == dest || NULL == dest->content || NULL == src || NULL == src->content)
@@ -169,7 +197,7 @@ void e_copy_line(struct e_line *dest, const struct e_line *src) {
     dest->content[dest->len] = '\0';
 }
 
-int e_line_is_empty(const struct e_line *line) {
+int _e_line_is_empty(const struct e_line *line) {
     size_t i;
 
     if (NULL == line) return 1;
@@ -180,7 +208,7 @@ int e_line_is_empty(const struct e_line *line) {
     return 1;
 }
 
-int e_line_equal(const struct e_line *line1, const struct e_line *line2) {
+int _e_line_equal(const struct e_line *line1, const struct e_line *line2) {
     size_t i;
 
     if (NULL == line1 || NULL == line2) return 0;
@@ -194,7 +222,7 @@ int e_line_equal(const struct e_line *line1, const struct e_line *line2) {
     return 1;
 }
 
-void e_clean_line(struct e_line *line) {
+void _e_clean_line(struct e_line *line) {
     if (NULL == line) return;
     if (NULL == line->content) return;
     
@@ -202,7 +230,7 @@ void e_clean_line(struct e_line *line) {
     memset(line->content, 0x0, line->cap);
 }
 
-void e_free_line(struct e_line *line) {
+void _e_free_line(struct e_line *line) {
     if (NULL == line) return;
 
     if (NULL == line->content) {
@@ -214,7 +242,7 @@ void e_free_line(struct e_line *line) {
 }
 /* ========================================================================= */
 /* ================ functions related to history management ================ */
-struct e_history *e_create_history(const size_t max_len) {
+struct e_history *_e_create_history(const size_t max_len) {
     struct e_history *new_history = malloc(sizeof *new_history);
     if (NULL == new_history) return NULL;
 
@@ -230,7 +258,7 @@ struct e_history *e_create_history(const size_t max_len) {
     return new_history;
 }
 
-void e_add_entry(struct e_history *history, const struct e_line *new_line) {
+void _e_add_entry(struct e_history *history, const struct e_line *new_line) {
     /* Makes a copy of new_line and appends it to history */
     size_t i;
     struct e_line *copy_str;
@@ -241,15 +269,15 @@ void e_add_entry(struct e_history *history, const struct e_line *new_line) {
         NULL == new_line
     ) return;
 
-    if (e_line_is_empty(new_line)) return;
+    if (_e_line_is_empty(new_line)) return;
     if (history->len > 0) {
-        if (e_line_equal(new_line, history->entries[history->len - 1])) return;
+        if (_e_line_equal(new_line, history->entries[history->len - 1])) return;
     }
 
-    copy_str = e_create_line(new_line->cap);
+    copy_str = _e_create_line(new_line->cap);
     if (NULL == copy_str) return;
 
-    e_copy_line(copy_str, new_line);
+    _e_copy_line(copy_str, new_line);
 
     /* remember: when an entry is added, history->curr always points to the last added element */
     if (history->len < history->cap) {
@@ -259,7 +287,7 @@ void e_add_entry(struct e_history *history, const struct e_line *new_line) {
     }
     else {
         /* deallocate first entry than shift eveything to the left and add entry in the last element at (history->cap - 1) */
-        e_free_line(history->entries[0]);
+        _e_free_line(history->entries[0]);
         for (i = 1; i < history->cap; i ++)
             history->entries[i -1] = history->entries[i];
         history->entries[history->cap - 1] = copy_str;
@@ -267,7 +295,7 @@ void e_add_entry(struct e_history *history, const struct e_line *new_line) {
     }
 }
 
-void e_free_history(struct e_history *history) {
+void _e_free_history(struct e_history *history) {
     size_t i;
 
     if (NULL == history || history->len > history->cap) return;
@@ -277,7 +305,7 @@ void e_free_history(struct e_history *history) {
     }
 
     for (i = 0; i < history->len; i ++) {
-        if (NULL != history->entries[i]) e_free_line(history->entries[i]);
+        if (NULL != history->entries[i]) _e_free_line(history->entries[i]);
     }
 
     free(history->entries);
@@ -308,8 +336,6 @@ void _enable_raw_mode(void) {
     raw_mode_on = 1;
 }
 
-int _is_raw_mode_enabled(void) { return raw_mode_on; }
-
 void _restore_terminal_mode(void) {
     if (termios_saved) {
         tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios);
@@ -326,6 +352,39 @@ void _get_terminal_size(size_t *cols, size_t *rows) {
 }
 /* ========================================================================= */
 /* ============================ CLI management ============================= */
+static struct e_cli_state *_create_e_cli_state(
+    const char *prompt,
+    const size_t max_line_size,
+    const size_t max_history_size
+) {
+    struct e_cli_state *new_state = malloc(sizeof *new_state);
+    if (NULL == new_state) return NULL;
+
+    new_state->p_line = malloc(sizeof *new_state->p_line);
+    if (NULL == new_state->p_line) return NULL;
+    (*new_state->p_line) = _e_create_line(max_line_size + 1);
+
+    new_state->curs = malloc(sizeof *new_state->curs);
+    if (NULL == new_state->curs) return NULL;
+    new_state->curs->x = 0;
+    new_state->curs->y = 0;
+
+    new_state->history = _e_create_history(max_history_size);
+    new_state->prompt = prompt;
+    _get_terminal_size(&new_state->term_cols, NULL);
+    
+    return new_state;
+}
+
+static void _e_free_cli_state(struct e_cli_state *cli) {
+    if (NULL == cli) return;
+    if (NULL != cli->p_line) _e_free_line(*cli->p_line);
+    if (NULL != cli->history) _e_free_history(cli->history);
+    if (NULL != cli->p_line) free(cli->p_line);
+    if (NULL != cli->curs) free(cli->curs);
+    if (NULL != cli) free(cli);
+}
+
 static int _is_cli_state_valid(struct e_cli_state *cli) {
     if (NULL == cli) return 0;
     if (NULL == cli->curs) return 0;
@@ -342,46 +401,36 @@ static void _reset_cursor(struct e_cursor *curs) {
 }
 
 static void _set_line_to_history_curr(struct e_cli_state *cli) {
-    /* e_free_line(*p_dest) --> than allocate new memory for storing the retrieved entry from history.
+    /* _e_free_line(*p_dest) --> than allocate new memory for storing the retrieved entry from history.
     the freshly allocated memory will than be automatically deallocated at the end of everything */
     struct e_line *res;
     size_t used_rows;
-    size_t term_cols = 0;
-    size_t prompt_len;
-    _get_terminal_size(&term_cols, NULL);
-
+    size_t prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
     if (0 == cli->history->len) return;
-    prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
 
     res = cli->history->entries[cli->history->curr];
-    e_free_line(*cli->p_line);
-    if (NULL != res) *cli->p_line = e_create_line(res->cap);
-    e_copy_line(*cli->p_line, res);
+    _e_free_line(*cli->p_line);
+    if (NULL != res) *cli->p_line = _e_create_line(res->cap);
+    _e_copy_line(*cli->p_line, res);
 
     /* settings the cursor to be at the end of the new string */
-    used_rows = (prompt_len + res->len + term_cols - 1) / term_cols;
+    used_rows = (prompt_len + res->len + cli->term_cols - 1) / cli->term_cols;
     cli->curs->y = (used_rows > 0) ? used_rows - 1 : 0;
-    cli->curs->x = (res->len + prompt_len) % term_cols;
+    cli->curs->x = (res->len + prompt_len) % cli->term_cols;
 }
 
 static void _move_cursor_last_line(struct e_cli_state *cli, const char pressed_key) {
-    size_t term_cols = 0;
-    size_t prompt_len;
-    size_t used_rows;
-    size_t move_down;
-    _get_terminal_size(&term_cols, NULL);
+    size_t prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
+    size_t used_rows = (prompt_len + (*cli->p_line)->len + cli->term_cols - 1) / cli->term_cols;
+    size_t move_down = (used_rows - 1) - cli->curs->y;
 
-    prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
-    used_rows = (prompt_len + (*cli->p_line)->len + term_cols - 1) / term_cols;
-    move_down = (used_rows - 1) - cli->curs->y;
-
-    if (cli->curs->x == term_cols)
+    if (cli->curs->x == cli->term_cols)
         if (ARROW_LEFT_KEY == pressed_key) move_down --;
     
     if (move_down > 0) printf("\033[%ldB\r", move_down);
 
     if (used_rows > 1) 
-        printf("\r\033[%ldC", ((*cli->p_line)->len + prompt_len) % (term_cols * (used_rows - 1)));
+        printf("\r\033[%ldC", ((*cli->p_line)->len + prompt_len) % (cli->term_cols * (used_rows - 1)));
     else printf("\r\033[%ldC", (*cli->p_line)->len + prompt_len);
     
     fflush(stdout);
@@ -390,12 +439,12 @@ static void _move_cursor_last_line(struct e_cli_state *cli, const char pressed_k
 static void _enter(struct e_cli_state *cli, const char c) {
     (*cli->p_line)->content[(*cli->p_line)->len] = '\0';
     _move_cursor_last_line(cli, c);
-    e_add_entry(cli->history, *cli->p_line);
+    _e_add_entry(cli->history, *cli->p_line);
     printf("\r\n");
 }
 
 static void _up_arrow(struct e_cli_state *cli) {
-    if (cli->history->curr == cli->history->len) e_clean_line(*cli->p_line);
+    if (cli->history->curr == cli->history->len) _e_clean_line(*cli->p_line);
     else _set_line_to_history_curr(cli);
     
     if (0 == cli->history->curr) cli->history->curr = cli->history->len;
@@ -405,12 +454,12 @@ static void _up_arrow(struct e_cli_state *cli) {
 static void _down_arrow(struct e_cli_state *cli) { 
     if (cli->history->curr == cli->history->len) cli->history->curr = 0;
     if (cli->history->curr == cli->history->len - 1) {
-        e_clean_line(*cli->p_line);
+        _e_clean_line(*cli->p_line);
         return;
     }
     
     cli->history->curr ++;
-    if (e_line_equal(*cli->p_line, cli->history->entries[cli->history->curr]))
+    if (_e_line_equal(*cli->p_line, cli->history->entries[cli->history->curr]))
         cli->history->curr ++;
     
     if (cli->history->curr < cli->history->len)
@@ -418,21 +467,18 @@ static void _down_arrow(struct e_cli_state *cli) {
     else {
         if (cli->history->len > 0) cli->history->curr = cli->history->len - 1;
         else cli->history->curr = 0;
-        e_clean_line(*cli->p_line);
+        _e_clean_line(*cli->p_line);
     }
 }
 
 static void _right_arrow(struct e_cli_state *cli) {
-    size_t term_cols = 0;
-    size_t prompt_len;
-    _get_terminal_size(&term_cols, NULL);
-    prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
+    size_t prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
 
-    if (cli->curs->y <= SIZE_MAX / term_cols && prompt_len <= SIZE_MAX - (*cli->p_line)->len) {
-        if (cli->curs->y * term_cols + cli->curs->x < (*cli->p_line)->len + prompt_len) {
+    if (cli->curs->y <= SIZE_MAX / cli->term_cols && prompt_len <= SIZE_MAX - (*cli->p_line)->len) {
+        if (cli->curs->y * cli->term_cols + cli->curs->x < (*cli->p_line)->len + prompt_len) {
             /* -1 is for the condition to be valid, adding -1 is because
             curs->x starts from 0 and term_cols starts from 1 --> so it is -2 */
-            if (cli->curs->x > term_cols - 2) {
+            if (cli->curs->x > cli->term_cols - 2) {
                 cli->curs->x = 0;
                 cli->curs->y ++;
             }
@@ -442,16 +488,12 @@ static void _right_arrow(struct e_cli_state *cli) {
 }
 
 static void _left_arrow(struct e_cli_state *cli) {
-    size_t term_cols = 0;
-    size_t prompt_len;
-    _get_terminal_size(&term_cols, NULL);
-
+    size_t prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
     if (0 == (*cli->p_line)->len) return;
-    prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
 
     if (cli->curs->y > 0) {
         if (cli->curs->x == 0) {
-            cli->curs->x = term_cols - 1;
+            cli->curs->x = cli->term_cols - 1;
             cli->curs->y --;
         }
         else cli->curs->x --;
@@ -460,38 +502,28 @@ static void _left_arrow(struct e_cli_state *cli) {
 }
 
 static void _canc(struct e_cli_state *cli) {
-    size_t term_cols = 0;
     size_t abs_x = 0;
-    size_t prompt_len;
-    size_t used_rows;
+    size_t prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
+    size_t used_rows = (prompt_len + (*cli->p_line)->len + cli->term_cols - 1) / cli->term_cols;
 
-    prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
-    _get_terminal_size(&term_cols, NULL);
-    used_rows = (prompt_len + (*cli->p_line)->len + term_cols - 1) / term_cols;
-
-    if ((*cli->p_line)->len > 0 && cli->curs->x < term_cols && used_rows >= 1) {
+    if ((*cli->p_line)->len > 0 && cli->curs->x < cli->term_cols && used_rows >= 1) {
         if (0 == cli->curs->y) abs_x = cli->curs->x;
-        else abs_x = cli->curs->x + (cli->curs->y * term_cols);
+        else abs_x = cli->curs->x + (cli->curs->y * cli->term_cols);
 
         /* this condition prevents canc beyond string end */
-        if (abs_x - prompt_len < (*cli->p_line)->len) e_remove_char(*cli->p_line, abs_x - prompt_len);
+        if (abs_x - prompt_len < (*cli->p_line)->len) _e_remove_char(*cli->p_line, abs_x - prompt_len);
     }
 }
 
 static void _backspace(struct e_cli_state *cli) {
-    /* move the cursor_pos than call _canc(...) function */
-    size_t term_cols = 0;
-    size_t prompt_len;
     int exec_backspace = 1;
+    size_t prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
     if (0 >= (*cli->p_line)->len) return;  /* nothing to delete, return */
-    
-    _get_terminal_size(&term_cols, NULL);
-    prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
 
     if (cli->curs->y > 0) {
         if (cli->curs->x == 0) {
             cli->curs->y --;
-            cli->curs->x = term_cols - 1;
+            cli->curs->x = cli->term_cols - 1;
         }
         else cli->curs->x --;
     }
@@ -503,27 +535,24 @@ static void _backspace(struct e_cli_state *cli) {
 
     if (0 == cli->curs->x && 0 < cli->curs->y) {
         cli->curs->y --;
-        cli->curs->x = term_cols;
+        cli->curs->x = cli->term_cols;
     }
 }
 
 static void _literal(struct e_cli_state *cli, char *c) {
-    size_t term_cols = 0;
-    size_t prompt_len;
     size_t real_index = 0;
-    _get_terminal_size(&term_cols, NULL);
-    prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
+    size_t prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
 
     if ((*cli->p_line)->len < (*cli->p_line)->cap - 1) {
         if (0 == cli->curs->y) real_index = cli->curs->x - prompt_len;
         else {
-            real_index = term_cols - prompt_len;  /* first row (excludes the prompt str length) */
-            if (cli->curs->y > 1) real_index += (cli->curs->y - 1) * term_cols;  /* length rows in the middle */
+            real_index = cli->term_cols - prompt_len;  /* first row (excludes the prompt str length) */
+            if (cli->curs->y > 1) real_index += (cli->curs->y - 1) * cli->term_cols;  /* length rows in the middle */
             real_index += cli->curs->x;
         }
-        e_add_char(*cli->p_line, real_index, *c);  /* curs->x - prompt_len is valid only for the first line */
+        _e_add_char(*cli->p_line, real_index, *c);  /* curs->x - prompt_len is valid only for the first line */
 
-        if (cli->curs->x > term_cols - 1) {
+        if (cli->curs->x > cli->term_cols - 1) {
             cli->curs->x = 1;
             cli->curs->y ++;
         }
@@ -531,18 +560,40 @@ static void _literal(struct e_cli_state *cli, char *c) {
     }
 }
 
+static void _ctrl_k(struct e_cli_state *cli) {
+    size_t real_index;
+    size_t prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
+
+    if (cli->curs->y > 0)
+        real_index = (cli->curs->y * cli->term_cols) + cli->curs->x - prompt_len;
+    else real_index = (cli->curs->x - prompt_len);
+    _e_delete_to_end(*cli->p_line, real_index);
+}
+
+static void _ctrl_u(struct e_cli_state *cli) {
+    size_t real_index;
+    size_t prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
+
+    if (cli->curs->y > 0)
+        real_index = (cli->curs->y * cli->term_cols) + cli->curs->x - prompt_len;
+    else real_index = (cli->curs->x - prompt_len);
+    
+    if (real_index <= 0) return;
+    _e_delete_to_start(*cli->p_line, real_index - 1);
+    cli->curs->x = prompt_len;
+    cli->curs->y = 0;
+}
+
+static void _ctrl_w(struct e_cli_state *cli) {
+    (void)cli;
+}
+
 static void _clean_display(struct e_cli_state *cli) {
-    size_t term_rows;
-    size_t term_cols = 0;
-    size_t used_rows;
     size_t i;
     size_t prompt_len = (NULL == cli->prompt) ? 0 : strlen(cli->prompt);
-    _get_terminal_size(&term_cols, &term_rows);
-    used_rows = (prompt_len + (*cli->p_line)->len + term_cols - 1) / term_cols;
+    size_t used_rows = (prompt_len + (*cli->p_line)->len + cli->term_cols - 1) / cli->term_cols;
 
     _move_cursor_last_line(cli, 0);
-
-    /* clean output */
     for (i = 0; i < used_rows; i ++) {
         printf("\033[2K");
         if (i < used_rows - 1) printf("\033[A");
@@ -551,12 +602,8 @@ static void _clean_display(struct e_cli_state *cli) {
 }
 
 static void _write_display(struct e_cli_state *cli) {
-    size_t term_rows;
-    size_t term_cols = 0;
-    size_t used_rows;
     size_t prompt_len = (NULL == cli->prompt) ? 0 : strlen(cli->prompt);
-    _get_terminal_size(&term_cols, &term_rows);
-    used_rows = (prompt_len + (*cli->p_line)->len + term_cols - 1) / term_cols;
+    size_t used_rows = (prompt_len + (*cli->p_line)->len + cli->term_cols - 1) / cli->term_cols;
 
     printf("%s%s", cli->prompt, (*cli->p_line)->content);
     if (1 < used_rows) {
@@ -569,10 +616,7 @@ static void _write_display(struct e_cli_state *cli) {
 
 static e_stat_code _handle_display(struct e_cli_state *cli, char *c) {
     e_stat_code status = E_CONTINUE;
-    size_t term_cols = 1;
     int is_enter = (*c == NEWLINE_KEY || *c == CARR_RET_KEY);
-    
-    _get_terminal_size(&term_cols, NULL);
 
     if (!_is_cli_state_valid(cli)) return E_EXIT;
     if (!is_enter) _clean_display(cli);
@@ -609,17 +653,17 @@ static e_stat_code _handle_display(struct e_cli_state *cli, char *c) {
     case CTRL_B:                _left_arrow(cli); break;
     case CTRL_D:                _canc(cli); break;
     case CTRL_E:
-        cli->curs->y = ((*cli->p_line)->len + strlen(cli->prompt)) / term_cols;
-        cli->curs->x = ((*cli->p_line)->len + strlen(cli->prompt)) % term_cols;
+        cli->curs->y = ((*cli->p_line)->len + strlen(cli->prompt)) / cli->term_cols;
+        cli->curs->x = ((*cli->p_line)->len + strlen(cli->prompt)) % cli->term_cols;
         break;
     case CTRL_F:                _right_arrow(cli); break;
-    case CTRL_K:                break;  /* delete to the end of the line */
+    case CTRL_K:                _ctrl_k(cli); break;
     case CTRL_L:                _clear_terminal_screen(); break;
     case CTRL_N:                _down_arrow(cli); break;
     case CTRL_P:                _up_arrow(cli); break;
     case CTRL_T:                break;  /* swap the 2 char before the cursor */
-    case CTRL_U:                break;  /* delete to the beginning of the line */
-    case CTRL_W:                break;  /* delete to the beginning of the current word */
+    case CTRL_U:                _ctrl_u(cli); break;
+    case CTRL_W:                _ctrl_w(cli); break;
     default:                    _literal(cli, c); break;
     }
 
@@ -646,7 +690,7 @@ e_stat_code easycli(struct e_cli_state *cli) {
         fflush(stdout);
     }
 
-    if (!_is_raw_mode_enabled()) {
+    if (!raw_mode_on) {
         _enable_raw_mode();
         atexit(_restore_terminal_mode);
     }
@@ -674,29 +718,18 @@ void run_easycli_ctx(
     void *ctx,
     e_stat_code (*callback_on_enter)(char *dest, void *ctx)
 ) {
-    struct e_line *line = e_create_line(max_str_len + 1);  /* +1 includes '\0' */
-    struct e_history *history = e_create_history(DEFAULT_HISTORY_MAX_SIZE);
-    struct e_cursor curs = { .x = 0, .y = 0 };
     e_stat_code code;
-
-    struct e_cli_state cli = {
-        .prompt = prompt,
-        .p_line = &line,
-        .history = history,
-        .curs = &curs
-    };
+    struct e_cli_state *cli = _create_e_cli_state(prompt, max_str_len, DEFAULT_HISTORY_MAX_SIZE);
 
     _clear_terminal_screen();
     do {
-        code = easycli(&cli);
+        code = easycli(cli);
         if (E_SEND_COMMAND == code) {
-            if (NULL != callback_on_enter) code = callback_on_enter(line->content, ctx);
-            e_clean_line(line);
-            _reset_cursor(&curs);
+            if (NULL != callback_on_enter) code = callback_on_enter((*cli->p_line)->content, ctx);
+            _e_clean_line(*cli->p_line);
+            _reset_cursor(cli->curs);
         }
     }
     while (E_EXIT != code);
-
-    e_free_line(line);
-    e_free_history(history);
+    _e_free_cli_state(cli);
 }
