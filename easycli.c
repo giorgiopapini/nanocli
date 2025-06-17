@@ -122,7 +122,7 @@ static void _ctrl_w(struct e_cli_state *cli);
 static void _clean_display(struct e_cli_state *cli);
 static void _write_display(struct e_cli_state *cli);
 static e_stat_code _handle_display(struct e_cli_state *cli, char *c);
-e_stat_code easycli(struct e_cli_state *cli);
+static e_stat_code _easycli(struct e_cli_state *cli);
 
 
 /* ================= functions related to line management ================== */
@@ -719,7 +719,7 @@ static e_stat_code _handle_display(struct e_cli_state *cli, char *c) {
     return status;
 }
 
-e_stat_code easycli(struct e_cli_state *cli) {
+static e_stat_code _easycli(struct e_cli_state *cli) {
     fd_set readfds;
     e_stat_code retval = E_CONTINUE;
     int ret;
@@ -770,7 +770,7 @@ void run_easycli_ctx(
 
     _clear_terminal_screen();
     do {
-        code = easycli(cli);
+        code = _easycli(cli);
         if (E_SEND_COMMAND == code) {
             if (NULL != callback_on_enter) code = callback_on_enter((*cli->p_line)->content, ctx);
             _e_clean_line(*cli->p_line);
