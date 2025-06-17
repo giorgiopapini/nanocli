@@ -72,6 +72,7 @@ struct e_line *_e_create_line(const size_t max_len);
 static void _e_remove_char(struct e_line *line, const size_t target_index);
 static void _e_delete_to_end(struct e_line *line, const size_t start_index);
 static void _e_delete_to_start(struct e_line *line, const size_t end_index);
+static void _e_delete_word(struct e_line *line, const size_t curr_index);
 static void _e_add_char(struct e_line *line, const size_t target_index, const char new_char);
 static void _e_copy_line(struct e_line *dest, const struct e_line *src);
 static int _e_line_is_empty(const struct e_line *line);
@@ -115,6 +116,7 @@ static void _canc(struct e_cli_state *cli);
 static void _backspace(struct e_cli_state *cli);
 static void _literal(struct e_cli_state *cli, char *c);
 static void _ctrl_k(struct e_cli_state *cli);
+static void _ctrl_t(struct e_cli_state *cli);
 static void _ctrl_u(struct e_cli_state *cli);
 static void _ctrl_w(struct e_cli_state *cli);
 static void _clean_display(struct e_cli_state *cli);
@@ -164,6 +166,20 @@ static void _e_delete_to_start(struct e_line *line, const size_t end_index) {
     if (NULL == line || NULL == line->content || line->len <= 0) return;
     new_len = line->len - (end_index + 1);
     memmove(line->content, line->content + end_index + 1, new_len);
+    line->content[new_len] = '\0';
+    line->len = new_len;
+}
+
+static void _e_delete_word(struct e_line *line, const size_t curr_index) {
+    size_t i;
+    size_t new_len;
+    if (NULL == line || NULL == line->content || line->len <= 0) return;
+
+    for (i = curr_index; i > 0; i --)
+        if (isspace(line->content[i])) break;
+    
+    new_len = line->len - (curr_index - i);
+    memmove(line->content + i + 1, line->content + curr_index + 1, new_len);
     line->content[new_len] = '\0';
     line->len = new_len;
 }
@@ -570,6 +586,24 @@ static void _ctrl_k(struct e_cli_state *cli) {
     _e_delete_to_end(*cli->p_line, real_index);
 }
 
+static void _ctrl_t(struct e_cli_state *cli) {
+    size_t real_index;
+    char tmp;
+    size_t prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
+
+    if (cli->curs->y > 0)
+        real_index = (cli->curs->y * cli->term_cols) + cli->curs->x - prompt_len;
+    else real_index = (cli->curs->x - prompt_len);
+    
+    if (real_index == (*cli->p_line)->len && 0 < (*cli->p_line)->len) real_index --;
+    if (real_index <= 0) return;
+
+    tmp =(*cli->p_line)->content[real_index - 1];
+    (*cli->p_line)->content[real_index - 1] = (*cli->p_line)->content[real_index];
+    (*cli->p_line)->content[real_index] = tmp;
+    _right_arrow(cli);
+}
+
 static void _ctrl_u(struct e_cli_state *cli) {
     size_t real_index;
     size_t prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
@@ -585,7 +619,20 @@ static void _ctrl_u(struct e_cli_state *cli) {
 }
 
 static void _ctrl_w(struct e_cli_state *cli) {
-    (void)cli;
+    size_t real_index;
+    size_t prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
+
+    if (cli->curs->y > 0)
+        real_index = (cli->curs->y * cli->term_cols) + cli->curs->x - prompt_len;
+    else real_index = (cli->curs->x - prompt_len);
+    if (real_index <= 0) return;
+
+    /* update string and than set the cursor position using _left_arrow function */
+    _e_delete_word(*cli->p_line, real_index - 1);
+    for (; (real_index) > 1; real_index --) {
+        if (isspace((*cli->p_line)->content[real_index - 1])) break;
+        _left_arrow(cli);
+    }
 }
 
 static void _clean_display(struct e_cli_state *cli) {
@@ -661,7 +708,7 @@ static e_stat_code _handle_display(struct e_cli_state *cli, char *c) {
     case CTRL_L:                _clear_terminal_screen(); break;
     case CTRL_N:                _down_arrow(cli); break;
     case CTRL_P:                _up_arrow(cli); break;
-    case CTRL_T:                break;  /* swap the 2 char before the cursor */
+    case CTRL_T:                _ctrl_t(cli); break;
     case CTRL_U:                _ctrl_u(cli); break;
     case CTRL_W:                _ctrl_w(cli); break;
     default:                    _literal(cli, c); break;
