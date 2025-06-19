@@ -5,8 +5,6 @@
 #include "easycli.h"
 
 /*
-    TODO:   Evaluate if it's better to use Alternate screen mode in easycli instead of clean_screen function
-
     TODO:   Add custom completion (developer registers a completion callback for autocompletition)
 
     TODO:   Save current history to a file and load history from a file.
@@ -16,7 +14,6 @@ e_stat_code callback_on_enter(char *line_content, void *ctx);
 
 int main(void) {
     run_easycli_ctx(DEFAULT_PROMPT, DEFAULT_MAX_INPUT_LEN, NULL, callback_on_enter);
-    
     return 0;
 }
 

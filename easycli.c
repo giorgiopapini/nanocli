@@ -83,6 +83,8 @@ static void _e_free_line(struct e_line *line);
 static struct e_history *_e_create_history(const size_t max_len);
 static void _e_add_entry(struct e_history *history, const struct e_line *new_line);
 static void _e_free_history(struct e_history *history);
+
+struct e_history *glob_history = NULL;
 /* ========================================================================= */
 /* ========================== terminal management ========================== */
 static void _get_terminal_size(size_t *cols, size_t *rows);
@@ -115,8 +117,8 @@ static void _ctrl_k(struct e_cli_state *cli);
 static void _ctrl_t(struct e_cli_state *cli);
 static void _ctrl_u(struct e_cli_state *cli);
 static void _ctrl_w(struct e_cli_state *cli);
-static void _clean_display(struct e_cli_state *cli);
-static void _write_display(struct e_cli_state *cli, const int masked);
+static void _clean_line(struct e_cli_state *cli);
+static void _write_line(struct e_cli_state *cli, const int masked);
 static e_stat_code _handle_display(
     struct e_cli_state *cli,
     struct e_history *history,
@@ -329,11 +331,7 @@ void _e_free_history(struct e_history *history) {
 /* ========================================================================= */
 /* ========================== terminal management ========================== */
 void _clear_terminal_screen(void) {
-#ifdef _WIN32
-    system("cls");
-#else
-    system("clear");
-#endif
+    if (write(STDOUT_FILENO,"\x1b[H\x1b[2J",7) <= 0) return;
 }
 
 void _enable_raw_mode(void) {
@@ -444,16 +442,21 @@ static void _move_cursor_last_line(struct e_cli_state *cli, const char pressed_k
     size_t prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
     size_t used_rows = (prompt_len + (*cli->p_line)->len + cli->term_cols - 1) / cli->term_cols;
     size_t move_down = (used_rows - 1) - cli->curs->y;
+    char buf[32];
+    int len;
 
-    if (cli->curs->x == cli->term_cols)
-        if (ARROW_LEFT_KEY == pressed_key) move_down --;
+    if (cli->curs->x == cli->term_cols && ARROW_LEFT_KEY == pressed_key) move_down --;
     
-    if (move_down > 0) printf("\033[%ldB\r", move_down);
+    if (move_down > 0) {
+        len = snprintf(buf, sizeof buf, "\033[%ldB\r", move_down),
+        write(STDOUT_FILENO, buf, (size_t)len);
+    }
 
-    if (used_rows > 1) 
-        printf("\r\033[%ldC", ((*cli->p_line)->len + prompt_len) % (cli->term_cols * (used_rows - 1)));
-    else printf("\r\033[%ldC", (*cli->p_line)->len + prompt_len);
-    
+    if (used_rows > 1)
+        len = snprintf(buf, sizeof buf, "\r\033[%ldC", ((*cli->p_line)->len + prompt_len) % (cli->term_cols * (used_rows - 1)));
+    else len = snprintf(buf, sizeof buf, "\r\033[%ldC", ((*cli->p_line)->len + prompt_len));
+    write(STDOUT_FILENO, buf, (size_t)len);
+
     fflush(stdout);
 }
 
@@ -461,7 +464,7 @@ static void _enter(struct e_cli_state *cli, struct e_history *history, const cha
     (*cli->p_line)->content[(*cli->p_line)->len] = '\0';
     _move_cursor_last_line(cli, c);
     _e_add_entry(history, *cli->p_line);
-    printf("\r\n");
+    write(STDOUT_FILENO, "\r\n", 2);
 }
 
 static void _up_arrow(struct e_cli_state *cli, struct e_history *history) {
@@ -625,36 +628,49 @@ static void _ctrl_w(struct e_cli_state *cli) {
     if (cli->curs->x > 0) _right_arrow(cli);
 }
 
-static void _clean_display(struct e_cli_state *cli) {
+static void _clean_line(struct e_cli_state *cli) {
     size_t i;
     size_t prompt_len = (NULL == cli->prompt) ? 0 : strlen(cli->prompt);
     size_t used_rows = (prompt_len + (*cli->p_line)->len + cli->term_cols - 1) / cli->term_cols;
 
     _move_cursor_last_line(cli, 0);
     for (i = 0; i < used_rows; i ++) {
-        printf("\033[2K");
-        if (i < used_rows - 1) printf("\033[A");
+        write(STDOUT_FILENO, "\033[2K", 4);
+        if (i < used_rows - 1) write(STDOUT_FILENO, "\033[A", 3);
     }
-    printf("\r");
+    write(STDOUT_FILENO, "\r", 1);
 }
 
-static void _write_display(struct e_cli_state *cli, const int masked) {
+static void _write_line(struct e_cli_state *cli, const int masked) {
     size_t i;
+    char mask_char = DEFAULT_MASKED_CHAR;
     size_t prompt_len = (NULL == cli->prompt) ? 0 : strlen(cli->prompt);
     size_t used_rows = (prompt_len + (*cli->p_line)->len + cli->term_cols - 1) / cli->term_cols;
+    char buf[32];
+    int len;
 
-    printf("%s", cli->prompt);
+    write(STDOUT_FILENO, cli->prompt, prompt_len);
     if (masked) 
-        for (i = 0; i < (*cli->p_line)->len; i ++) printf("%c", DEFAULT_MASKED_CHAR);
-    else printf("%s", (*cli->p_line)->content);
+        for (i = 0; i < (*cli->p_line)->len; i ++) write(STDOUT_FILENO, &mask_char, 1);
+    else write(STDOUT_FILENO, (*cli->p_line)->content, (*cli->p_line)->len);
 
-    //printf("%s%s", cli->prompt, (*cli->p_line)->content);
     if (1 < used_rows) {
-        printf("\033[%ldA\r", used_rows - 1);
-        if (cli->curs->y > 0) printf("\033[%ldB", cli->curs->y);
-        if (cli->curs->x > 0) printf("\033[%ldC", cli->curs->x);
+        len = snprintf(buf, sizeof buf, "\033[%ldA\r", used_rows - 1);
+        write(STDOUT_FILENO, buf, (size_t)len);
+        
+        if (cli->curs->y > 0) {
+            len = snprintf(buf, sizeof buf, "\033[%ldB", cli->curs->y);
+            write(STDOUT_FILENO, buf, (size_t)len);
+        }
+        if (cli->curs->x > 0) {
+            len = snprintf(buf, sizeof buf, "\033[%ldC", cli->curs->x);
+            write(STDOUT_FILENO, buf, (size_t)len);
+        }
     }
-    else if (cli->curs->x > 0) printf("\r\033[%ldC", cli->curs->x);
+    else if (cli->curs->x > 0) {
+        len = snprintf(buf, sizeof buf, "\r\033[%ldC", cli->curs->x);
+        write(STDOUT_FILENO, buf, (size_t)len);
+    }
 }
 
 static e_stat_code _handle_display(
@@ -667,7 +683,7 @@ static e_stat_code _handle_display(
     int is_enter = (*c == NEWLINE_KEY || *c == CARR_RET_KEY);
 
     if (!_is_cli_state_valid(cli)) return E_EXIT;
-    if (!is_enter) _clean_display(cli);
+    if (!is_enter) _clean_line(cli);
 
     switch (*c) {
     case NEWLINE_KEY:
@@ -715,7 +731,7 @@ static e_stat_code _handle_display(
     default:                    _literal(cli, c); break;
     }
 
-    if (!is_enter) _write_display(cli, masked);
+    if (!is_enter) _write_line(cli, masked);
     fflush(stdout);
     return status;
 }
@@ -733,9 +749,9 @@ static e_stat_code _easycli(struct e_cli_state *cli, struct e_history *history, 
 
     /* print prompt in the first input line */
     if (0 == (*cli->p_line)->len && NULL != cli->prompt) {
-        printf("\r%s", cli->prompt);  /* \r overwrites prompt if prompt alredy written */
+        if (write(STDOUT_FILENO, "\r", 1) <= 0) return E_EXIT;
+        if (write(STDOUT_FILENO, cli->prompt, strlen(cli->prompt)) < 0) return E_EXIT;
         cli->curs->x = strlen(cli->prompt);
-        fflush(stdout);
     }
 
     if (!raw_mode_on) {
@@ -768,14 +784,14 @@ void run_easycli_ctx(
 ) {
     e_stat_code code;
     struct e_cli_state *cli = _create_e_cli_state(prompt, max_str_len);
-    struct e_history *history = _e_create_history(DEFAULT_HISTORY_MAX_SIZE);
+    if (NULL == glob_history) glob_history = _e_create_history(DEFAULT_HISTORY_MAX_SIZE);
 
-    _clear_terminal_screen();
+    if (write(STDOUT_FILENO, "\033[?1049h\033[H", 11) <= 0) return;  /* enter alter mode */
     do {
-        code = _easycli(cli, history, 0);
+        code = _easycli(cli, glob_history, 0);
         if (E_SEND_COMMAND == code) {
             if (NULL != callback_on_enter) code = callback_on_enter((*cli->p_line)->content, ctx);
-            if (E_CONTINUE == code) printf("\r\n");
+            if (E_CONTINUE == code) printf("\n");  /* printf needed, works well if printf is used in callback */
             fflush(stdout);
             _e_clean_line(*cli->p_line);
             _reset_cursor(cli->curs);
@@ -783,7 +799,8 @@ void run_easycli_ctx(
     }
     while (E_EXIT != code);
     _e_free_cli_state(cli);
-    _e_free_history(history);
+    _e_free_history(glob_history);
+    if (write(STDOUT_FILENO, "\033[?1049l", 8) <= 0) return;  /* exit alter mode */
 }
 
 char *easy_ask(const char *question, const int masked) {
@@ -793,6 +810,7 @@ char *easy_ask(const char *question, const int masked) {
     if (NULL == cli) return NULL;
 
     printf("%s", question);
+    write(STDOUT_FILENO, question, strlen(question));
     do code = _easycli(cli, NULL, masked);
     while (E_SEND_COMMAND != code && E_EXIT != code);
 
