@@ -3,10 +3,10 @@
 
 #include <stddef.h>
 
-#define DEFAULT_PROMPT              "easycli > "
-#define DEFAULT_MASKED_CHAR         '*'
-#define DEFAULT_MAX_INPUT_LEN       1024
-#define DEFAULT_HISTORY_MAX_SIZE    1024
+#define E_DEFAULT_PROMPT                "easycli > "
+#define E_DEFAULT_MASKED_CHAR           '*'
+#define E_DEFAULT_MAX_INPUT_LEN         1024
+#define E_DEFAULT_HISTORY_MAX_SIZE      1024
 
 
 char *easycli(const char *prompt, size_t max_str_len);

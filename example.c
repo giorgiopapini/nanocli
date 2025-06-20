@@ -18,8 +18,8 @@ static int _login(void);
 
 
 static int _login(void) {
-    char *username = easy_ask("username: ", DEFAULT_MAX_INPUT_LEN, 0);
-    char *password = easy_ask("password: ", DEFAULT_MAX_INPUT_LEN, 1);
+    char *username = easy_ask("username: ", E_DEFAULT_MAX_INPUT_LEN, 0);
+    char *password = easy_ask("password: ", E_DEFAULT_MAX_INPUT_LEN, 1);
     int logged_in = 0;
 
     if (0 == strcmp(username, "user1") && 0 == strcmp(password, "123"))
@@ -34,7 +34,7 @@ int main(void) {
     char *res;
 
     /* exit string is needed to deallocate history automatically */
-    while (NULL != (res = easycli(DEFAULT_PROMPT, DEFAULT_MAX_INPUT_LEN))) {
+    while (NULL != (res = easycli(E_DEFAULT_PROMPT, E_DEFAULT_MAX_INPUT_LEN))) {
         if (0 == strcmp(res, "login")) {
             if (_login()) easy_print("logged in!");
             else easy_print("login failed!");

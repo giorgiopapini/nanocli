@@ -645,7 +645,7 @@ static void _clean_line(struct e_cli_state *cli) {
 
 static void _write_line(struct e_cli_state *cli, const int masked) {
     size_t i;
-    char mask_char = DEFAULT_MASKED_CHAR;
+    char mask_char = E_DEFAULT_MASKED_CHAR;
     size_t prompt_len = (NULL == cli->prompt) ? 0 : strlen(cli->prompt);
     size_t used_rows = (prompt_len + (*cli->p_line)->len + cli->term_cols - 1) / cli->term_cols;
     char buf[32];
@@ -798,7 +798,7 @@ char *easy_ask(const char *question, const size_t max_len, const int masked) {
 
 char *easycli(const char *prompt, size_t max_str_len) {
     char *response = NULL;
-    if (NULL == glob_history) glob_history = _e_create_history(DEFAULT_HISTORY_MAX_SIZE);
+    if (NULL == glob_history) glob_history = _e_create_history(E_DEFAULT_HISTORY_MAX_SIZE);
 
     response = _get_line(prompt, max_str_len, glob_history, 0);
     if (NULL == response) _e_free_history(&glob_history);
