@@ -7,30 +7,43 @@
 /*
     TODO:   Add custom completion (developer registers a completion callback for autocompletition)
 
+    TODO:   Find a better way to use History, maybe make it initialize by the user and make the user pass it
+            in easycli? Otherwise I need to find a way to NOT let it be global. Each easycli call should have its
+            own history
+
     TODO:   Save current history to a file and load history from a file.
 */
 
-e_stat_code callback_on_enter(char *line_content, void *ctx);
+static int _login(void);
 
-int main(void) {
-    run_easycli_ctx(DEFAULT_PROMPT, DEFAULT_MAX_INPUT_LEN, NULL, callback_on_enter);
-    return 0;
+
+static int _login(void) {
+    char *username = easy_ask("username: ", DEFAULT_MAX_INPUT_LEN, 0);
+    char *password = easy_ask("password: ", DEFAULT_MAX_INPUT_LEN, 1);
+    int logged_in = 0;
+
+    if (0 == strcmp(username, "user1") && 0 == strcmp(password, "123"))
+        logged_in = 1;
+    else logged_in = 0;
+    free(username);
+    free(password);
+    return logged_in;
 }
 
-e_stat_code callback_on_enter(char *line_content, void *ctx) {
-    char *prova;
-    (void)ctx;
-    (void)line_content;
+int main(void) {
+    char *res;
 
-    if (0 == strcmp(line_content, "login")) {
-        prova = easy_ask("username: ", 0);
-        free(prova);
-        prova = easy_ask("password: ", 1);
-        if (0 == strcmp(prova, "prova")) printf("SUCCESS");
-        else printf("FAILURE");
-        free(prova);
-        return E_CONTINUE;
+    /* exit string is needed to deallocate history automatically */
+    while (NULL != (res = easycli(DEFAULT_PROMPT, DEFAULT_MAX_INPUT_LEN))) {
+        if (0 == strcmp(res, "login")) {
+            if (_login()) easy_print("logged in!");
+            else easy_print("login failed!");
+        }
+        if (0 == strcmp(res, "exit")) {
+            free(res);
+            break;
+        }
+        free(res);
     }
-    if (0 == strcmp(line_content, "exit")) return E_EXIT;
-    return E_NOP;
+    return 0;
 }

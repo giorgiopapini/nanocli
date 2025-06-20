@@ -44,6 +44,13 @@ struct e_cli_state {
 };
 
 typedef enum {
+    E_EXIT = -1,
+    E_NOP = 0,  /* will not print '\n' after callback */
+    E_CONTINUE,  /* will add a '\n' after callback, used to render content printed in the callback */
+    E_SEND_COMMAND
+} e_stat_code;
+
+typedef enum {
 	CTRL_A = 1,
 	CTRL_B = 2,
 	CTRL_C = 3,
@@ -81,7 +88,7 @@ static void _e_free_line(struct e_line *line);
 /* ================ functions related to history management ================ */
 static struct e_history *_e_create_history(const size_t max_len);
 static void _e_add_entry(struct e_history *history, const struct e_line *new_line);
-static void _e_free_history(struct e_history *history);
+static void _e_free_history(struct e_history **p_history);
 
 struct e_history *glob_history = NULL;
 /* ========================================================================= */
@@ -99,8 +106,7 @@ static int raw_mode_on = 0;
 static struct e_cli_state *_create_e_cli_state(const char *prompt, const size_t max_line_size);
 static void _e_free_cli_state(struct e_cli_state *cli);
 static int _is_cli_state_valid(struct e_cli_state *cli);
-static size_t _get_line_index_form_curs(struct e_cli_state *cli);
-static void _reset_cursor(struct e_cursor *curs);
+static size_t _get_line_index_from_curs(struct e_cli_state *cli);
 /* double pointer is needed because these functions free *p_dest and loads the e_line retrieved from history */
 static void _set_line_to_history_curr(struct e_cli_state *cli, struct e_history *history);
 static void _move_cursor_last_line(struct e_cli_state *cli, const char pressed_key);
@@ -116,6 +122,7 @@ static void _ctrl_k(struct e_cli_state *cli);
 static void _ctrl_t(struct e_cli_state *cli);
 static void _ctrl_u(struct e_cli_state *cli);
 static void _ctrl_w(struct e_cli_state *cli);
+char *_get_line(const char *prompt, const size_t max_len, struct e_history *history, const int masked);
 static void _clean_line(struct e_cli_state *cli);
 static void _write_line(struct e_cli_state *cli, const int masked);
 static e_stat_code _handle_display(
@@ -124,7 +131,7 @@ static e_stat_code _handle_display(
     char *c,
     const int masked
 );
-static e_stat_code _easycli(struct e_cli_state *cli, struct e_history *history, const int masked);
+static e_stat_code _handle_char_input(struct e_cli_state *cli, struct e_history *history, const int masked);
 
 
 /* ================= functions related to line management ================== */
@@ -208,8 +215,7 @@ void _e_copy_line(struct e_line *dest, const struct e_line *src) {
     dest->len = src->len;
     dest->cap = src->cap;
 
-    for (i = 0; i < src->len; i ++)
-        dest->content[i] = src->content[i];
+    for (i = 0; i < src->len; i ++) dest->content[i] = src->content[i];
     dest->content[dest->len] = '\0';
 }
 
@@ -311,21 +317,22 @@ void _e_add_entry(struct e_history *history, const struct e_line *new_line) {
     }
 }
 
-void _e_free_history(struct e_history *history) {
+void _e_free_history(struct e_history **p_history) {
     size_t i;
 
-    if (NULL == history || history->len > history->cap) return;
-    if (NULL == history->entries) {
-        free(history);
+    if (NULL == p_history || NULL == *p_history || (*p_history)->len > (*p_history)->cap) return;
+    if (NULL == (*p_history)->entries) {
+        free(*p_history);
+        *p_history = NULL;
         return;
     }
 
-    for (i = 0; i < history->len; i ++) {
-        if (NULL != history->entries[i]) _e_free_line(history->entries[i]);
-    }
+    for (i = 0; i < (*p_history)->len; i ++)
+        if (NULL != (*p_history)->entries[i]) _e_free_line((*p_history)->entries[i]);
 
-    free(history->entries);
-    free(history);
+    free((*p_history)->entries);
+    free(*p_history);
+    *p_history = NULL;
 }
 /* ========================================================================= */
 /* ========================== terminal management ========================== */
@@ -340,7 +347,10 @@ void _enable_raw_mode(void) {
     termios_saved = 1;
 
     raw = orig_termios;
-    raw.c_lflag &= (tcflag_t) ~(ICANON | ECHO);
+    raw.c_iflag &= (tcflag_t)~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+    raw.c_oflag &= (tcflag_t)~(OPOST);
+    raw.c_cflag |= (tcflag_t)(CS8);
+    raw.c_lflag &= (tcflag_t)~(ECHO | ICANON | IEXTEN | ISIG);
     raw.c_cc[VMIN] = 1;
     raw.c_cc[VTIME] = 0;
 
@@ -398,7 +408,7 @@ static int _is_cli_state_valid(struct e_cli_state *cli) {
     return 1;
 }
 
-static size_t _get_line_index_form_curs(struct e_cli_state *cli) {
+static size_t _get_line_index_from_curs(struct e_cli_state *cli) {
     size_t line_index = 0;
     size_t prompt_len;
     
@@ -409,13 +419,6 @@ static size_t _get_line_index_form_curs(struct e_cli_state *cli) {
         line_index = (cli->curs->y * cli->term_cols) + cli->curs->x - prompt_len;
     else line_index = (cli->curs->x - prompt_len);
     return line_index;
-}
-
-static void _reset_cursor(struct e_cursor *curs) {
-    if (NULL != curs) {
-        curs->x = 0;
-        curs->y = 0;
-    }
 }
 
 static void _set_line_to_history_curr(struct e_cli_state *cli, struct e_history *history) {
@@ -586,13 +589,13 @@ static void _literal(struct e_cli_state *cli, char *c) {
 }
 
 static void _ctrl_k(struct e_cli_state *cli) {
-    size_t real_index = _get_line_index_form_curs(cli);
+    size_t real_index = _get_line_index_from_curs(cli);
     _e_delete_to_end(*cli->p_line, real_index);
 }
 
 static void _ctrl_t(struct e_cli_state *cli) {
     char tmp;
-    size_t real_index = _get_line_index_form_curs(cli);
+    size_t real_index = _get_line_index_from_curs(cli);
         
     if (real_index == (*cli->p_line)->len && 0 < (*cli->p_line)->len) real_index --;
     if (real_index <= 0) return;
@@ -604,7 +607,7 @@ static void _ctrl_t(struct e_cli_state *cli) {
 }
 
 static void _ctrl_u(struct e_cli_state *cli) {
-    size_t real_index = _get_line_index_form_curs(cli);
+    size_t real_index = _get_line_index_from_curs(cli);
     if (real_index <= 0) return;
 
     _e_delete_to_start(*cli->p_line, real_index - 1);
@@ -614,7 +617,7 @@ static void _ctrl_u(struct e_cli_state *cli) {
 
 static void _ctrl_w(struct e_cli_state *cli) {
     int word_found = 0;
-    size_t real_index = _get_line_index_form_curs(cli);
+    size_t real_index = _get_line_index_from_curs(cli);
     if (real_index <= 0) return;
 
     /* update string and than set the cursor position using _left_arrow function */
@@ -714,6 +717,7 @@ static e_stat_code _handle_display(
         cli->curs->x = strlen(cli->prompt);
         break;
     case CTRL_B:                _left_arrow(cli); break;
+    case CTRL_C:                return E_EXIT;
     case CTRL_D:                _canc(cli); break;
     case CTRL_E:
         cli->curs->y = ((*cli->p_line)->len + strlen(cli->prompt)) / cli->term_cols;
@@ -735,16 +739,13 @@ static e_stat_code _handle_display(
     return status;
 }
 
-static e_stat_code _easycli(struct e_cli_state *cli, struct e_history *history, const int masked) {
+static e_stat_code _handle_char_input(struct e_cli_state *cli, struct e_history *history, const int masked) {
     fd_set readfds;
     e_stat_code retval = E_CONTINUE;
     int ret;
     char c;
 
-    if (NULL == cli || NULL == cli->p_line || NULL == *(cli->p_line)) {
-        retval = E_EXIT;
-        goto exit;
-    }
+    if (NULL == cli || NULL == cli->p_line || NULL == *(cli->p_line)) return E_EXIT;
 
     /* print prompt in the first input line */
     if (0 == (*cli->p_line)->len && NULL != cli->prompt) {
@@ -753,69 +754,59 @@ static e_stat_code _easycli(struct e_cli_state *cli, struct e_history *history, 
         cli->curs->x = strlen(cli->prompt);
     }
 
-    if (!raw_mode_on) {
-        _enable_raw_mode();
-        atexit(_restore_terminal_mode);
-    }
-
     FD_ZERO(&readfds);
     FD_SET(STDIN_FILENO, &readfds);
     ret = select(STDIN_FILENO + 1, &readfds, NULL, NULL, NULL);
 
     if (-1 == ret) {
-        if (EINTR == errno) {
-            retval = E_EXIT;
-            goto exit;
-        }
+        if (EINTR == errno) return E_EXIT;
     }
     else if (read(STDIN_FILENO, &c, 1) > 0) retval = _handle_display(cli, history, &c, masked);
 
-exit:
-    if (E_EXIT == retval) _restore_terminal_mode();
     return retval;
 }
 
-void run_easycli_ctx(
-    const char *prompt,
-    size_t max_str_len,
-    void *ctx,
-    e_stat_code (*callback_on_enter)(char *dest, void *ctx)
-) {
-    e_stat_code code;
-    struct e_cli_state *cli = _create_e_cli_state(prompt, max_str_len);
-    if (NULL == glob_history) glob_history = _e_create_history(DEFAULT_HISTORY_MAX_SIZE);
-
-    if (write(STDOUT_FILENO, "\033[?1049h\033[H", 11) <= 0) return;  /* enter alter mode */
-    do {
-        code = _easycli(cli, glob_history, 0);
-        if (E_SEND_COMMAND == code) {
-            if (NULL != callback_on_enter) code = callback_on_enter((*cli->p_line)->content, ctx);
-            if (E_CONTINUE == code) printf("\n");  /* printf needed, works well if printf is used in callback */
-            fflush(stdout);
-            _e_clean_line(*cli->p_line);
-            _reset_cursor(cli->curs);
-        }
-    }
-    while (E_EXIT != code);
-    _e_free_cli_state(cli);
-    _e_free_history(glob_history);
-    if (write(STDOUT_FILENO, "\033[?1049l", 8) <= 0) return;  /* exit alter mode */
-}
-
-char *easy_ask(const char *question, const int masked) {
-    struct e_cli_state *cli = _create_e_cli_state(question, DEFAULT_MAX_INPUT_LEN);
-    char *response;
+char *_get_line(const char *prompt, const size_t max_len, struct e_history *history, const int masked) {
+    struct e_cli_state *cli = _create_e_cli_state(prompt, max_len);
+    char *response = NULL;
     e_stat_code code;
     if (NULL == cli) return NULL;
 
-    printf("%s", question);
-    write(STDOUT_FILENO, question, strlen(question));
-    do code = _easycli(cli, NULL, masked);
+    if (!raw_mode_on) {
+        _enable_raw_mode();
+        atexit(_restore_terminal_mode);
+    }
+    write(STDOUT_FILENO, prompt, strlen(prompt));
+    
+    do code = _handle_char_input(cli, history, masked);
     while (E_SEND_COMMAND != code && E_EXIT != code);
+    if (E_EXIT == code) goto exit;
 
     response = malloc((*cli->p_line)->len + 1);  /* including NULL terminator */
     strncpy(response, (*cli->p_line)->content, (*cli->p_line)->len);
     response[(*cli->p_line)->len] = '\0';
+    
+exit:
+    _restore_terminal_mode();
     _e_free_cli_state(cli);
     return response;
+}
+
+char *easy_ask(const char *question, const size_t max_len, const int masked) {
+    return _get_line(question, max_len, NULL, masked);
+}
+
+char *easycli(const char *prompt, size_t max_str_len) {
+    char *response = NULL;
+    if (NULL == glob_history) glob_history = _e_create_history(DEFAULT_HISTORY_MAX_SIZE);
+
+    response = _get_line(prompt, max_str_len, glob_history, 0);
+    if (NULL == response) _e_free_history(&glob_history);
+    return response;
+}
+
+void easy_print(const char *str) {
+    if (NULL == str) return;
+    write(STDOUT_FILENO, str, strlen(str));
+    write(STDOUT_FILENO, "\n", 1);
 }
