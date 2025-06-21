@@ -7,6 +7,8 @@ Easycli is a free, open-source, self-contained and lightweight replacement for G
 - Zero external dependencies
 - (~800) lines of code in a single '.c' file
 
+Easycli is currently available only for Unix-like operating systems conforming to the POSIX standard.
+
 ## How to use it
 The Easycli API consists of three functions: one to retrieve a line of input when enter key is pressed, one to prompt for specific information, and one to safely print formatted content.
 The ```example.c``` file should give you enough info to use the library. The following is an explanation of each function.
