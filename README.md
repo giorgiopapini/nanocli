@@ -27,7 +27,7 @@ int main(void) {
     return 0;
 }
 ```
-<br><br>
+---
 ```c
 char *easy_ask(const char *question, const size_t max_len, const int masked);  /* excluding NULL terminator */
 ```
@@ -48,7 +48,7 @@ if (0 == strcmp(line, "login")) {
     free(password);
 }
 ```
-<br><br>
+---
 ```c
 void easy_print(const char *str);
 ```
