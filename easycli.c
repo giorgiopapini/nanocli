@@ -472,7 +472,11 @@ static void _enter(struct e_cli_state *cli, struct e_history *history, const cha
 
 static void _up_arrow(struct e_cli_state *cli, struct e_history *history) {
     if (NULL == history) return;
-    if (history->curr == history->len) _e_clean_line(*cli->p_line);
+    if (history->curr == history->len) {
+        _e_clean_line(*cli->p_line);
+        cli->curs->x = 0;
+        cli->curs->y = 0;
+    }
     else _set_line_to_history_curr(cli, history);
     
     if (0 == history->curr) history->curr = history->len;
@@ -484,6 +488,8 @@ static void _down_arrow(struct e_cli_state *cli, struct e_history *history) {
     if (history->curr == history->len) history->curr = 0;
     if (history->curr == history->len - 1) {
         _e_clean_line(*cli->p_line);
+        cli->curs->x = 0;
+        cli->curs->y = 0;
         return;
     }
     
