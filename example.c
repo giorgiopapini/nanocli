@@ -5,7 +5,7 @@
 #include "easycli.h"
 
 /*
-    TODO:   Add custom completion (developer registers a completion callback for autocompletition)
+    TODO:   Add custom completion (developer registers a completion callback for autocompletition) Use a TRIE data structure for this
 
     TODO:   Find a better way to use History, maybe make it initialize by the user and make the user pass it
             in easycli? Otherwise I need to find a way to NOT let it be global. Each easycli call should have its
