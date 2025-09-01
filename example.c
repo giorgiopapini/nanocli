@@ -18,9 +18,17 @@ static int _login(void);
 
 
 static int _login(void) {
-    char *username = nanocli_ask("username: ", NCLI_DEFAULT_MAX_INPUT_LEN, 0);
-    char *password = nanocli_ask("password: ", NCLI_DEFAULT_MAX_INPUT_LEN, 1);
+    char *username;
+    char *password;
     int logged_in = 0;
+    
+    username = nanocli_ask("username: ", NCLI_DEFAULT_MAX_INPUT_LEN, 0);
+    if (!username) return 0;
+    password = nanocli_ask("password: ", NCLI_DEFAULT_MAX_INPUT_LEN, 1);
+    if (!password) {
+        free(username);
+        return 0;
+    }
 
     if (0 == strcmp(username, "user1") && 0 == strcmp(password, "123"))
         logged_in = 1;
