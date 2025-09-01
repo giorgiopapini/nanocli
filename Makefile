@@ -39,7 +39,7 @@ CFLAGS += -Wconversion -Wsign-conversion
 SRC != find . -name '*.c'
 OBJ = ${SRC:.c=.o}
 
-TARGET = easycli
+TARGET = nanocli
 
 all: $(TARGET)
 

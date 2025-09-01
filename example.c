@@ -2,13 +2,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "easycli.h"
+#include "nanocli.h"
 
 /*
     TODO:   Add custom completion (developer registers a completion callback for autocompletition) Use a TRIE data structure for this
 
     TODO:   Find a better way to use History, maybe make it initialize by the user and make the user pass it
-            in easycli? Otherwise I need to find a way to NOT let it be global. Each easycli call should have its
+            in nanocli? Otherwise I need to find a way to NOT let it be global. Each nanocli call should have its
             own history
 
     TODO:   Save current history to a file and load history from a file.
@@ -18,8 +18,8 @@ static int _login(void);
 
 
 static int _login(void) {
-    char *username = easy_ask("username: ", E_DEFAULT_MAX_INPUT_LEN, 0);
-    char *password = easy_ask("password: ", E_DEFAULT_MAX_INPUT_LEN, 1);
+    char *username = nanocli_ask("username: ", NCLI_DEFAULT_MAX_INPUT_LEN, 0);
+    char *password = nanocli_ask("password: ", NCLI_DEFAULT_MAX_INPUT_LEN, 1);
     int logged_in = 0;
 
     if (0 == strcmp(username, "user1") && 0 == strcmp(password, "123"))
@@ -34,10 +34,10 @@ int main(void) {
     char *res;
 
     /* exit string is needed to deallocate history automatically */
-    while (NULL != (res = easycli(E_DEFAULT_PROMPT, E_DEFAULT_MAX_INPUT_LEN))) {
+    while (NULL != (res = nanocli(NCLI_DEFAULT_PROMPT, NCLI_DEFAULT_MAX_INPUT_LEN))) {
         if (0 == strcmp(res, "login")) {
-            if (_login()) easy_print("logged in!");
-            else easy_print("login failed!");
+            if (_login()) nanocli_echo("logged in!");
+            else nanocli_echo("login failed!");
         }
         if (0 == strcmp(res, "exit")) {
             free(res);
