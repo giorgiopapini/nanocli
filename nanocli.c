@@ -101,6 +101,7 @@ static void _restore_terminal_mode(void);
 static struct termios orig_termios;
 static int termios_saved = 0;
 static int raw_modncli_on = 0;
+static int atexit_registered = 0;
 /* ========================================================================= */
 
 static struct ncli_cli_state *_create_ncli_cli_state(const char *prompt, const size_t max_linncli_size);
@@ -450,13 +451,13 @@ static void _move_cursor_last_line(struct ncli_cli_state *cli, const char presse
     if (cli->curs->x == cli->term_cols && ARROW_LEFT_KEY == pressed_key) movncli_down --;
     
     if (movncli_down > 0) {
-        len = snprintf(buf, sizeof buf, "\033[%ldB\r", movncli_down);
+        len = snprintf(buf, sizeof buf, "\033[%zuB\r", movncli_down);
         if (write(STDOUT_FILENO, buf, (size_t)len) < 0) return;  /* len can't be negative */
     }
 
     if (used_rows > 1)
-        len = snprintf(buf, sizeof buf, "\r\033[%ldC", ((*cli->p_line)->len + prompt_len) % (cli->term_cols * (used_rows - 1)));
-    else len = snprintf(buf, sizeof buf, "\r\033[%ldC", ((*cli->p_line)->len + prompt_len));
+        len = snprintf(buf, sizeof buf, "\r\033[%zuC", ((*cli->p_line)->len + prompt_len) % (cli->term_cols * (used_rows - 1)));
+    else len = snprintf(buf, sizeof buf, "\r\033[%zuC", ((*cli->p_line)->len + prompt_len));
 
     if (write(STDOUT_FILENO, buf, (size_t)len) < 0) return;  /* len can't be negative */
 }
@@ -669,20 +670,20 @@ static void _write_line(struct ncli_cli_state *cli, const int masked) {
     else if (write(STDOUT_FILENO, (*cli->p_line)->content, (*cli->p_line)->len) < 0) return;
 
     if (1 < used_rows) {
-        len = snprintf(buf, sizeof buf, "\033[%ldA\r", used_rows - 1);
+        len = snprintf(buf, sizeof buf, "\033[%zuA\r", used_rows - 1);
         if (write(STDOUT_FILENO, buf, (size_t)len) < 0) return;
         
         if (cli->curs->y > 0) {
-            len = snprintf(buf, sizeof buf, "\033[%ldB", cli->curs->y);
+            len = snprintf(buf, sizeof buf, "\033[%zuB", cli->curs->y);
             if (write(STDOUT_FILENO, buf, (size_t)len) < 0) return;
         }
         if (cli->curs->x > 0) {
-            len = snprintf(buf, sizeof buf, "\033[%ldC", cli->curs->x);
+            len = snprintf(buf, sizeof buf, "\033[%zuC", cli->curs->x);
             if (write(STDOUT_FILENO, buf, (size_t)len) < 0) return;
         }
     }
     else if (cli->curs->x > 0) {
-        len = snprintf(buf, sizeof buf, "\r\033[%ldC", cli->curs->x);
+        len = snprintf(buf, sizeof buf, "\r\033[%zuC", cli->curs->x);
         if (write(STDOUT_FILENO, buf, (size_t)len) < 0) return;
     }
 }
@@ -769,10 +770,13 @@ static ncli_stat_code _handle_char_input(struct ncli_cli_state *cli, struct ncli
     FD_SET((int)STDIN_FILENO, &readfds);
     ret = select(STDIN_FILENO + 1, &readfds, NULL, NULL, NULL);
 
+    
     if (-1 == ret) {
-        if (EINTR == errno) return NCLI_EXIT;
+        if (EINTR == errno) return NCLI_CONTINUE;
+        return NCLI_EXIT;
     }
     else if (read(STDIN_FILENO, &c, 1) > 0) retval = _handle_display(cli, history, &c, masked);
+    else if (0 == ret) return NCLI_EXIT;
 
     return retval;
 }
@@ -785,7 +789,10 @@ char *_get_line(const char *prompt, const size_t max_len, struct ncli_history *h
 
     if (!raw_modncli_on) {
         _enable_raw_mode();
-        atexit(_restore_terminal_mode);
+        if (!atexit_registered) {
+            atexit(_restore_terminal_mode);
+            atexit_registered = 1;
+        }
     }
     if (write(STDOUT_FILENO, prompt, strlen(prompt)) < 0) goto exit;
     
@@ -794,6 +801,7 @@ char *_get_line(const char *prompt, const size_t max_len, struct ncli_history *h
     if (NCLI_EXIT == code) goto exit;
 
     response = malloc((*cli->p_line)->len + 1);  /* including NULL terminator */
+    if (NULL == response) goto exit;
     strncpy(response, (*cli->p_line)->content, (*cli->p_line)->len);
     response[(*cli->p_line)->len] = '\0';
     
