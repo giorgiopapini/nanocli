@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
 #include <sys/select.h>
 #include <sys/ioctl.h>
 #include <errno.h>
@@ -36,7 +37,7 @@ struct ncli_history {
     size_t cap;
 };
 
-struct ncli_cli_state {
+struct ncli_state {
     const char *prompt;  /* should be null terminated */
     struct ncli_line **p_line;
     struct ncli_cursor *curs;
@@ -97,42 +98,45 @@ static void _get_terminal_size(size_t *cols, size_t *rows);
 void _clear_nanocli_screen(void);
 static void _enable_raw_mode(void);
 static void _restore_terminal_mode(void);
+static void _handle_winch(int sig);
+static void _update_terminal_on_winch(struct ncli_state *cli);
 
 static struct termios orig_termios;
 static int termios_saved = 0;
-static int raw_modncli_on = 0;
+static int raw_mode_on = 0;
 static int atexit_registered = 0;
+static volatile sig_atomic_t winch_flag = 0;
 /* ========================================================================= */
 
-static struct ncli_cli_state *_create_ncli_cli_state(const char *prompt, const size_t max_linncli_size);
-static void _ncli_free_cli_state(struct ncli_cli_state *cli);
-static int _is_cli_state_valid(struct ncli_cli_state *cli);
-static size_t _get_line_index_from_curs(struct ncli_cli_state *cli);
+static struct ncli_state *_create_ncli_state(const char *prompt, const size_t max_line_size);
+static void _ncli_free_cli_state(struct ncli_state *cli);
+static int _is_cli_state_valid(struct ncli_state *cli);
+static size_t _get_line_index_from_curs(struct ncli_state *cli);
 /* double pointer is needed because these functions free *p_dest and loads the ncli_line retrieved from history */
-static void _set_line_to_history_curr(struct ncli_cli_state *cli, struct ncli_history *history);
-static void _move_cursor_last_line(struct ncli_cli_state *cli, const char pressed_key);
-static void _enter(struct ncli_cli_state *cli, struct ncli_history *history, const char c);
-static void _up_arrow(struct ncli_cli_state *cli, struct ncli_history *history);
-static void _down_arrow(struct ncli_cli_state *cli, struct ncli_history *history);
-static void _right_arrow(struct ncli_cli_state *cli);
-static void _left_arrow(struct ncli_cli_state *cli);
-static void _canc(struct ncli_cli_state *cli);
-static void _backspace(struct ncli_cli_state *cli);
-static void _literal(struct ncli_cli_state *cli, char *c);
-static void _ctrl_k(struct ncli_cli_state *cli);
-static void _ctrl_t(struct ncli_cli_state *cli);
-static void _ctrl_u(struct ncli_cli_state *cli);
-static void _ctrl_w(struct ncli_cli_state *cli);
+static void _set_line_to_history_curr(struct ncli_state *cli, struct ncli_history *history);
+static void _move_cursor_last_line(struct ncli_state *cli, const char pressed_key);
+static void _enter(struct ncli_state *cli, struct ncli_history *history, const char c);
+static void _up_arrow(struct ncli_state *cli, struct ncli_history *history);
+static void _down_arrow(struct ncli_state *cli, struct ncli_history *history);
+static void _right_arrow(struct ncli_state *cli);
+static void _left_arrow(struct ncli_state *cli);
+static void _canc(struct ncli_state *cli);
+static void _backspace(struct ncli_state *cli);
+static void _literal(struct ncli_state *cli, char *c);
+static void _ctrl_k(struct ncli_state *cli);
+static void _ctrl_t(struct ncli_state *cli);
+static void _ctrl_u(struct ncli_state *cli);
+static void _ctrl_w(struct ncli_state *cli);
 char *_get_line(const char *prompt, const size_t max_len, struct ncli_history *history, const int masked);
-static void _clean_line(struct ncli_cli_state *cli);
-static void _write_line(struct ncli_cli_state *cli, const int masked);
+static void _clean_line(struct ncli_state *cli);
+static void _write_line(struct ncli_state *cli, const int masked);
 static ncli_stat_code _handle_display(
-    struct ncli_cli_state *cli,
+    struct ncli_state *cli,
     struct ncli_history *history,
     char *c,
     const int masked
 );
-static ncli_stat_code _handle_char_input(struct ncli_cli_state *cli, struct ncli_history *history, const int masked);
+static ncli_stat_code _handle_char_input(struct ncli_state *cli, struct ncli_history *history, const int masked);
 
 
 /* ================= functions related to line management ================== */
@@ -356,13 +360,13 @@ void _enable_raw_mode(void) {
     raw.c_cc[VTIME] = 0;
 
     if (-1 == tcsetattr(STDIN_FILENO, TCSANOW, &raw)) return;
-    raw_modncli_on = 1;
+    raw_mode_on = 1;
 }
 
 void _restore_terminal_mode(void) {
     if (termios_saved) {
         tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios);
-        raw_modncli_on = 0;
+        raw_mode_on = 0;
     }
 }
 
@@ -373,15 +377,31 @@ void _get_terminal_size(size_t *cols, size_t *rows) {
     if (NULL != cols) *cols = w.ws_col;
     if (NULL != rows) *rows = w.ws_row;
 }
+
+static void _handle_winch(int sig) {
+    (void)sig;
+    winch_flag = 1;
+}
+
+static void _update_terminal_on_winch(struct ncli_state *cli) {
+    size_t old_cols = cli->term_cols;
+    size_t idx;
+
+    _get_terminal_size(&cli->term_cols, NULL);
+    idx = cli->curs->y * old_cols + cli->curs->x;  /* absolute "linear" position */
+    cli->curs->x = idx % cli->term_cols;
+    cli->curs->y = idx / cli->term_cols;
+}
+
 /* ========================================================================= */
 /* ============================ CLI management ============================= */
-static struct ncli_cli_state *_create_ncli_cli_state(const char *prompt, const size_t max_linncli_size) {
-    struct ncli_cli_state *new_state = malloc(sizeof *new_state);
+static struct ncli_state *_create_ncli_state(const char *prompt, const size_t max_line_size) {
+    struct ncli_state *new_state = malloc(sizeof *new_state);
     if (NULL == new_state) return NULL;
 
     new_state->p_line = malloc(sizeof *new_state->p_line);
     if (NULL == new_state->p_line) return NULL;
-    (*new_state->p_line) = _ncli_create_line(max_linncli_size + 1);
+    (*new_state->p_line) = _ncli_create_line(max_line_size + 1);
 
     new_state->curs = malloc(sizeof *new_state->curs);
     if (NULL == new_state->curs) return NULL;
@@ -394,7 +414,7 @@ static struct ncli_cli_state *_create_ncli_cli_state(const char *prompt, const s
     return new_state;
 }
 
-static void _ncli_free_cli_state(struct ncli_cli_state *cli) {
+static void _ncli_free_cli_state(struct ncli_state *cli) {
     if (NULL == cli) return;
     if (NULL != cli->p_line) _ncli_free_line(*cli->p_line);
     if (NULL != cli->p_line) free(cli->p_line);
@@ -402,29 +422,28 @@ static void _ncli_free_cli_state(struct ncli_cli_state *cli) {
     if (NULL != cli) free(cli);
 }
 
-static int _is_cli_state_valid(struct ncli_cli_state *cli) {
+static int _is_cli_state_valid(struct ncli_state *cli) {
     if (NULL == cli) return 0;
     if (NULL == cli->curs) return 0;
     if (NULL == cli->p_line || NULL == *cli->p_line) return 0;
     return 1;
 }
 
-static size_t _get_line_index_from_curs(struct ncli_cli_state *cli) {
-    size_t linncli_index = 0;
+static size_t _get_line_index_from_curs(struct ncli_state *cli) {
+    size_t line_index = 0;
     size_t prompt_len;
     
     if (NULL == cli || NULL == cli->curs) return 0;
     prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
 
     if (cli->curs->y > 0)
-        linncli_index = (cli->curs->y * cli->term_cols) + cli->curs->x - prompt_len;
-    else linncli_index = (cli->curs->x - prompt_len);
-    return linncli_index;
+        line_index = (cli->curs->y * cli->term_cols) + cli->curs->x - prompt_len;
+    else line_index = (cli->curs->x - prompt_len);
+    return line_index;
 }
 
-static void _set_line_to_history_curr(struct ncli_cli_state *cli, struct ncli_history *history) {
-    /* _ncli_free_line(*p_dest) --> than allocate new memory for storing the retrieved entry from history.
-    the freshly allocated memory will than be automatically deallocated at the end of everything */
+static void _set_line_to_history_curr(struct ncli_state *cli, struct ncli_history *history) {
+    /* Free old line, allocate new one for history entry. It’s auto-freed later */
     struct ncli_line *res;
     size_t used_rows;
     size_t prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
@@ -441,17 +460,17 @@ static void _set_line_to_history_curr(struct ncli_cli_state *cli, struct ncli_hi
     cli->curs->x = (res->len + prompt_len) % cli->term_cols;
 }
 
-static void _move_cursor_last_line(struct ncli_cli_state *cli, const char pressed_key) {
+static void _move_cursor_last_line(struct ncli_state *cli, const char pressed_key) {
     size_t prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
     size_t used_rows = (prompt_len + (*cli->p_line)->len + cli->term_cols - 1) / cli->term_cols;
-    size_t movncli_down = (used_rows - 1) - cli->curs->y;
+    size_t move_down = (used_rows - 1) - cli->curs->y;
     char buf[32];
     int len;
 
-    if (cli->curs->x == cli->term_cols && ARROW_LEFT_KEY == pressed_key) movncli_down --;
+    if (cli->curs->x == cli->term_cols && ARROW_LEFT_KEY == pressed_key) move_down --;
     
-    if (movncli_down > 0) {
-        len = snprintf(buf, sizeof buf, "\033[%zuB\r", movncli_down);
+    if (move_down > 0) {
+        len = snprintf(buf, sizeof buf, "\033[%zuB\r", move_down);
         if (write(STDOUT_FILENO, buf, (size_t)len) < 0) return;  /* len can't be negative */
     }
 
@@ -462,7 +481,7 @@ static void _move_cursor_last_line(struct ncli_cli_state *cli, const char presse
     if (write(STDOUT_FILENO, buf, (size_t)len) < 0) return;  /* len can't be negative */
 }
 
-static void _enter(struct ncli_cli_state *cli, struct ncli_history *history, const char c) {
+static void _enter(struct ncli_state *cli, struct ncli_history *history, const char c) {
     if (NULL != history) {
         _ncli_add_entry(history, *cli->p_line);
         history->curr = (history->len > 0) ? history->len - 1 : 0;
@@ -472,7 +491,7 @@ static void _enter(struct ncli_cli_state *cli, struct ncli_history *history, con
     if (write(STDOUT_FILENO, "\r\n", 2) < 0) return;
 }
 
-static void _up_arrow(struct ncli_cli_state *cli, struct ncli_history *history) {
+static void _up_arrow(struct ncli_state *cli, struct ncli_history *history) {
     if (NULL == history) return;
     if (history->curr == history->len) {
         _ncli_clean_line(*cli->p_line);
@@ -485,7 +504,7 @@ static void _up_arrow(struct ncli_cli_state *cli, struct ncli_history *history) 
     else history->curr --;
 }
 
-static void _down_arrow(struct ncli_cli_state *cli, struct ncli_history *history) { 
+static void _down_arrow(struct ncli_state *cli, struct ncli_history *history) { 
     cli->curs->x = 0;
     cli->curs->y = 0;
     
@@ -509,7 +528,7 @@ static void _down_arrow(struct ncli_cli_state *cli, struct ncli_history *history
     }
 }
 
-static void _right_arrow(struct ncli_cli_state *cli) {
+static void _right_arrow(struct ncli_state *cli) {
     size_t prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
 
     if (cli->curs->y <= SIZE_MAX / cli->term_cols && prompt_len <= SIZE_MAX - (*cli->p_line)->len) {
@@ -525,7 +544,7 @@ static void _right_arrow(struct ncli_cli_state *cli) {
     }
 }
 
-static void _left_arrow(struct ncli_cli_state *cli) {
+static void _left_arrow(struct ncli_state *cli) {
     size_t prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
     if (0 == (*cli->p_line)->len) return;
 
@@ -539,7 +558,7 @@ static void _left_arrow(struct ncli_cli_state *cli) {
     else if (cli->curs->x > prompt_len) cli->curs->x --;
 }
 
-static void _canc(struct ncli_cli_state *cli) {
+static void _canc(struct ncli_state *cli) {
     size_t abs_x = 0;
     size_t prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
     size_t used_rows = (prompt_len + (*cli->p_line)->len + cli->term_cols - 1) / cli->term_cols;
@@ -553,7 +572,7 @@ static void _canc(struct ncli_cli_state *cli) {
     }
 }
 
-static void _backspace(struct ncli_cli_state *cli) {
+static void _backspace(struct ncli_state *cli) {
     int exec_backspace = 1;
     size_t prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
     if (0 >= (*cli->p_line)->len) return;  /* nothing to delete, return */
@@ -577,7 +596,7 @@ static void _backspace(struct ncli_cli_state *cli) {
     }
 }
 
-static void _literal(struct ncli_cli_state *cli, char *c) {
+static void _literal(struct ncli_state *cli, char *c) {
     size_t real_index = 0;
     size_t prompt_len = (NULL != cli->prompt) ? strlen(cli->prompt) : 0;
 
@@ -598,12 +617,12 @@ static void _literal(struct ncli_cli_state *cli, char *c) {
     }
 }
 
-static void _ctrl_k(struct ncli_cli_state *cli) {
+static void _ctrl_k(struct ncli_state *cli) {
     size_t real_index = _get_line_index_from_curs(cli);
     _ncli_delete_to_end(*cli->p_line, real_index);
 }
 
-static void _ctrl_t(struct ncli_cli_state *cli) {
+static void _ctrl_t(struct ncli_state *cli) {
     char tmp;
     size_t real_index = _get_line_index_from_curs(cli);
         
@@ -616,7 +635,7 @@ static void _ctrl_t(struct ncli_cli_state *cli) {
     _right_arrow(cli);
 }
 
-static void _ctrl_u(struct ncli_cli_state *cli) {
+static void _ctrl_u(struct ncli_state *cli) {
     size_t real_index = _get_line_index_from_curs(cli);
     if (real_index <= 0) return;
 
@@ -625,7 +644,7 @@ static void _ctrl_u(struct ncli_cli_state *cli) {
     cli->curs->y = 0;
 }
 
-static void _ctrl_w(struct ncli_cli_state *cli) {
+static void _ctrl_w(struct ncli_state *cli) {
     int word_found = 0;
     size_t real_index = _get_line_index_from_curs(cli);
     if (real_index <= 0) return;
@@ -640,7 +659,7 @@ static void _ctrl_w(struct ncli_cli_state *cli) {
     if (cli->curs->x > 0) _right_arrow(cli);
 }
 
-static void _clean_line(struct ncli_cli_state *cli) {
+static void _clean_line(struct ncli_state *cli) {
     size_t i;
     size_t prompt_len = (NULL == cli->prompt) ? 0 : strlen(cli->prompt);
     size_t used_rows = (prompt_len + (*cli->p_line)->len + cli->term_cols - 1) / cli->term_cols;
@@ -651,10 +670,11 @@ static void _clean_line(struct ncli_cli_state *cli) {
         if (i < used_rows - 1)
             if (write(STDOUT_FILENO, "\033[A", 3) < 0) return;
     }
-    if (write(STDOUT_FILENO, "\r", 1) < 0) return;
+    write(STDOUT_FILENO, "\r", 1);
+    write(STDOUT_FILENO, "\033[J", 3);  /* clears everything below the cursor, prevent leftover wrapped fregments */
 }
 
-static void _write_line(struct ncli_cli_state *cli, const int masked) {
+static void _write_line(struct ncli_state *cli, const int masked) {
     size_t i;
     char mask_char = NCLI_DEFAULT_MASKED_CHAR;
     size_t prompt_len = (NULL == cli->prompt) ? 0 : strlen(cli->prompt);
@@ -689,7 +709,7 @@ static void _write_line(struct ncli_cli_state *cli, const int masked) {
 }
 
 static ncli_stat_code _handle_display(
-    struct ncli_cli_state *cli,
+    struct ncli_state *cli,
     struct ncli_history *history,
     char *c,
     const int masked
@@ -751,12 +771,11 @@ static ncli_stat_code _handle_display(
     return status;
 }
 
-static ncli_stat_code _handle_char_input(struct ncli_cli_state *cli, struct ncli_history *history, const int masked) {
+static ncli_stat_code _handle_char_input(struct ncli_state *cli, struct ncli_history *history, const int masked) {
     fd_set readfds;
     ncli_stat_code retval = NCLI_CONTINUE;
     int ret;
     char c;
-
     if (NULL == cli || NULL == cli->p_line || NULL == *(cli->p_line)) return NCLI_EXIT;
 
     /* print prompt in the first input line */
@@ -770,7 +789,6 @@ static ncli_stat_code _handle_char_input(struct ncli_cli_state *cli, struct ncli
     FD_SET((int)STDIN_FILENO, &readfds);
     ret = select(STDIN_FILENO + 1, &readfds, NULL, NULL, NULL);
 
-    
     if (-1 == ret) {
         if (EINTR == errno) return NCLI_CONTINUE;
         return NCLI_EXIT;
@@ -782,12 +800,13 @@ static ncli_stat_code _handle_char_input(struct ncli_cli_state *cli, struct ncli
 }
 
 char *_get_line(const char *prompt, const size_t max_len, struct ncli_history *history, const int masked) {
-    struct ncli_cli_state *cli = _create_ncli_cli_state(prompt, max_len);
+    /* ncli_state is reallocated each loop because nanocli is called once per cycle */
+    struct ncli_state *cli = _create_ncli_state(prompt, max_len);
     char *response = NULL;
     ncli_stat_code code;
     if (NULL == cli) return NULL;
 
-    if (!raw_modncli_on) {
+    if (!raw_mode_on) {
         _enable_raw_mode();
         if (!atexit_registered) {
             atexit(_restore_terminal_mode);
@@ -796,7 +815,13 @@ char *_get_line(const char *prompt, const size_t max_len, struct ncli_history *h
     }
     if (write(STDOUT_FILENO, prompt, strlen(prompt)) < 0) goto exit;
     
-    do code = _handle_char_input(cli, history, masked);
+    do {
+        if (winch_flag) {
+            winch_flag = 0;
+            _update_terminal_on_winch(cli);
+        }
+        code = _handle_char_input(cli, history, masked);
+    }
     while (NCLI_SEND_COMMAND != code && NCLI_EXIT != code);
     if (NCLI_EXIT == code) goto exit;
 
@@ -817,8 +842,18 @@ char *nanocli_ask(const char *question, const size_t max_len, const int masked) 
 
 char *nanocli(const char *prompt, size_t max_str_len) {
     char *response = NULL;
-    if (NULL == glob_history) glob_history = _ncli_create_history(NCLI_DEFAULT_HISTORY_MAX_SIZE);
+    struct sigaction sa;
+    
+    sa.sa_handler = _handle_winch;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
 
+    if (-1 == sigaction(SIGWINCH, &sa, NULL)) {
+        perror("sigaction");
+        exit(EXIT_FAILURE);
+    }
+
+    if (NULL == glob_history) glob_history = _ncli_create_history(NCLI_DEFAULT_HISTORY_MAX_SIZE);
     response = _get_line(prompt, max_str_len, glob_history, 0);
     if (NULL == response) _ncli_free_history(&glob_history);
     return response;
