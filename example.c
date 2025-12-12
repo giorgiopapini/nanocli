@@ -12,6 +12,8 @@
             own history
 
     TODO:   Save current history to a file and load history from a file.
+
+    TODO:   When the line is full of chars, if left_arrow and than right_arrow is pressed a bug happens
 */
 
 static int _login(void);
